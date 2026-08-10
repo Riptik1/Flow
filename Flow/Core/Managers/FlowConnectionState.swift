@@ -285,9 +285,6 @@ final class ConnectionManager: NSObject, ObservableObject {
         discoveredPeers = []
         macProfileImageData = nil
         state = .disconnected
-        #if canImport(AppKit)
-        MacUnlockService.shared.stopMonitoring()
-        #endif
         startBrowsingCore()
     }
 
@@ -299,9 +296,6 @@ final class ConnectionManager: NSObject, ObservableObject {
         savedPeerName = nil
         cancelReconnect()
         teardownBrowsing()
-        #if canImport(AppKit)
-        MacUnlockService.shared.stopMonitoring()
-        #endif
         DispatchQueue.main.async {
             self.connectedPeer = nil
             self.discoveredPeers = []
@@ -394,13 +388,6 @@ extension ConnectionManager: MCSessionDelegate {
                 self.teardownBrowsing()
                 self.startKeepalive()
 
-                #if canImport(AppKit)
-                MacUnlockService.shared.stopMonitoring()
-                MacUnlockService.shared.startMonitoring { [weak self] message in
-                    self?.send(message)
-                }
-                #endif
-
                 #if canImport(UIKit)
                 self.requestInitialStateFromMac()
                 #endif
@@ -423,10 +410,6 @@ extension ConnectionManager: MCSessionDelegate {
                 self.connectedPeer = nil
                 self.macProfileImageData = nil
                 self.state = .disconnected
-
-                #if canImport(AppKit)
-                MacUnlockService.shared.stopMonitoring()
-                #endif
 
                 self.scheduleReconnect()
 

@@ -22,6 +22,24 @@ final class FrameRenderer {
         displayLayer = layer
     }
 
+    func reset() {
+        decodeQueue.async { [weak self] in
+            guard let self else { return }
+            self.spsData = nil
+            self.ppsData = nil
+            self.formatDescription = nil
+            DispatchQueue.main.async {
+                if #available(iOS 18.0, *) {
+                    if let renderer = self.displayLayer?.sampleBufferRenderer {
+                        renderer.flush(removingDisplayedImage: true, completionHandler: nil)
+                    }
+                } else {
+                    self.displayLayer?.flushAndRemoveImage()
+                }
+            }
+        }
+    }
+
     func display(_ data: Data) {
         decodeQueue.async { [weak self] in
             self?.process(data)
@@ -129,8 +147,15 @@ final class FrameRenderer {
         }
 
         DispatchQueue.main.async {
-            if displayLayer.status == .failed {
-                displayLayer.flush()
+            if #available(iOS 18.0, *) {
+                let renderer = displayLayer.sampleBufferRenderer
+                if renderer.status == .failed {
+                    renderer.flush(removingDisplayedImage: false, completionHandler: nil)
+                }
+            } else {
+                if displayLayer.status == .failed {
+                    displayLayer.flush()
+                }
             }
             displayLayer.enqueue(sampleBuffer)
         }
@@ -196,3 +221,4 @@ final class FrameBackingView: UIView {
         displayLayer.videoGravity = .resizeAspect
     }
 }
+

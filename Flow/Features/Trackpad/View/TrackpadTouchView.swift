@@ -1,10 +1,9 @@
 //
-//  TrackpadHaptics.swift
+//  TrackpadTouchView.swift
 //  Flow
 //
 //  Created by Riptik Jhajhria on 04/07/26.
 //
-
 
 import SwiftUI
 import UIKit
@@ -49,6 +48,13 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
     private let swipeTrigger:       CGFloat      = 22
     private let multiTapCooldown:   TimeInterval = 0.65
     private let rightClickMinDur:   TimeInterval = 0.05
+
+    private let speedKey  = "flow.trackpadSpeed"
+    private let speedMin  : CGFloat = 0.4
+    private let speedBase : CGFloat = 1.0
+    private let speedMax  : CGFloat = 2.2
+    private var speedMultiplier: CGFloat = 1.0
+    private var speedObserver: NSObjectProtocol?
 
     private struct TR {
         let id: ObjectIdentifier
@@ -101,8 +107,26 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
         gr.delaysTouchesBegan   = false
         gr.delegate = self
         addGestureRecognizer(gr)
+        updateSpeedMultiplier()
+        speedObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateSpeedMultiplier()
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        if let speedObserver { NotificationCenter.default.removeObserver(speedObserver) }
+    }
+
+    private func updateSpeedMultiplier() {
+        let stored = UserDefaults.standard.object(forKey: speedKey) as? Double ?? 0.5
+        let v = min(1.0, max(0.0, stored))
+        if v <= 0.5 {
+            speedMultiplier = speedMin + (speedBase - speedMin) * CGFloat(v / 0.5)
+        } else {
+            speedMultiplier = speedBase + (speedMax - speedBase) * CGFloat((v - 0.5) / 0.5)
+        }
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -244,7 +268,7 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
             s.dragging = true
             s.phase = .oneFinger
             s.haptics.drag()
-            s.cm.send(.clickDragBegin)
+            Task { @MainActor in  s.cm.send(.clickDragBegin) }
         }
     }
 
@@ -333,7 +357,7 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
             } else if cdx != 0 || cdy != 0 {
                 scrollVelX = scrollVelX * 0.6 + cdx * 0.4
                 scrollVelY = scrollVelY * 0.6 + cdy * 0.4
-                cm.sendUnreliable(.scroll(dx: Float(scrollVelX), dy: Float(scrollVelY)))
+                cm.sendUnreliable(.scroll(dx: Float(scrollVelX * speedMultiplier), dy: Float(scrollVelY * speedMultiplier)))
             }
         case .swipe:
             break
@@ -463,7 +487,7 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
     private func gap(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
     private func accel(_ dx: CGFloat, _ dy: CGFloat) -> (CGFloat, CGFloat) {
         let m = hypot(dx, dy); guard m > 0 else { return (0, 0) }
-        let factor = min(4.0, 1.5 + m * 0.072)
+        let factor = min(4.0, 1.5 + m * 0.072) * speedMultiplier
         return (dx * factor, dy * factor)
     }
 }

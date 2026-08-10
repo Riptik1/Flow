@@ -12,8 +12,8 @@ import IOKit.hid
 import ServiceManagement
 
 struct FlowMenuBarView: View {
-    // @StateObject private var connection = ConnectionManager.shared
-    @StateObject private var connection = RemoteConnectionManager.shared
+    @StateObject private var connection = FlowConnectionRepository.shared
+    @StateObject private var pairing = RemotePairingViewModel.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -30,6 +30,10 @@ struct FlowMenuBarView: View {
             Divider()
 
             contentSection
+
+            Divider()
+
+            remoteAccessSection
 
             Divider()
 
@@ -56,10 +60,9 @@ struct FlowMenuBarView: View {
         .frame(width: 220)
         .fixedSize(horizontal: false, vertical: true)
         .onAppear {
-            // if FlowShouldAutoSearch {
-            //     ConnectionManager.shared.startAutoConnect()
-            // }
-            connection.startAutoConnect()
+            if FlowShouldAutoSearch {
+                connection.startAutoConnect()
+            }
         }
     }
 
@@ -77,14 +80,13 @@ struct FlowMenuBarView: View {
         switch connection.state {
         case .disconnected:
             Button(action: {
-                // FlowShouldAutoSearch = true
-                // ConnectionManager.shared.startSearching()
-                connection.beginPairingAsOwner()
+                FlowShouldAutoSearch = true
+                connection.startSearching()
             }) {
                 HStack(spacing: 6) {
-                    Image(systemName: "qrcode")
+                    Image(systemName: "dot.radiowaves.left.and.right")
                         .font(.system(size: 12))
-                    Text("Generate Pairing Code")
+                    Text("Search for iPhone")
                         .font(.system(size: 12))
                 }
             }
@@ -93,31 +95,35 @@ struct FlowMenuBarView: View {
             .padding(.vertical, 6)
 
         case .searching:
-            if let code = connection.pairingCode {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Enter this code on your iPhone")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Text(code)
-                        .font(.system(size: 20, weight: .bold, design: .monospaced))
-                        .tracking(3)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-            } else {
+            if connection.discoveredPeers.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Generating code...")
+                    Text("Searching...")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
+            } else {
+                ForEach(connection.discoveredPeers) { peer in
+                    Button(action: { connection.connect(to: peer) }) {
+                        HStack {
+                            Text(peer.deviceName)
+                                .font(.system(size: 12))
+                            Spacer()
+                            Text("Connect")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 5)
+                }
             }
             Button(action: {
-                // FlowShouldAutoSearch = false
-                // ConnectionManager.shared.cancelSearching()
-                connection.cancelPairing()
+                FlowShouldAutoSearch = false
+                connection.cancelSearching()
             }) {
                 Text("Cancel")
                     .font(.system(size: 12))
@@ -139,12 +145,17 @@ struct FlowMenuBarView: View {
 
         case .connected:
             VStack(alignment: .leading, spacing: 4) {
-                Text(connection.pairedPeer?.peerName ?? "")
+                Text(connection.connectedPeer?.deviceName ?? "")
                     .font(.system(size: 13, weight: .semibold))
-                Text("Paired remotely")
+                Text(connection.connectedPeer?.deviceModel ?? "")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Button(action: { connection.revokeCurrentPair() }) {
+                if let battery = connection.connectedPeer?.batteryLevel, battery >= 0 {
+                    Text("Battery: \(Int(battery))%")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Button(action: { connection.disconnect() }) {
                     Text("Disconnect")
                         .font(.system(size: 12))
                         .foregroundStyle(.red)
@@ -154,5 +165,46 @@ struct FlowMenuBarView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
         }
+    }
+
+    @ViewBuilder
+    private var remoteAccessSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Remote Access")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            if let code = pairing.pairingCode {
+                Text(code)
+                    .font(.system(size: 16, weight: .bold, design: .monospaced))
+                    .tracking(3)
+                Text("Expires in \(pairing.remainingSeconds)s")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            } else {
+                Button(action: { pairing.generateCode() }) {
+                    HStack(spacing: 6) {
+                        if pairing.isBusy {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "qrcode")
+                                .font(.system(size: 11))
+                        }
+                        Text(pairing.isBusy ? "Generating…" : "Generate Pairing Code")
+                            .font(.system(size: 12))
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(pairing.isBusy)
+            }
+
+            if let error = pairing.errorMessage {
+                Text(error)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
     }
 }

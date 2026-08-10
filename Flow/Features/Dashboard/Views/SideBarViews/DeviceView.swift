@@ -1,79 +1,31 @@
 //
-//  SavedDevice.swift
+//  DeviceView.swift
 //  Flow
 //
 //  Created by Riptik Jhajhria on 09/06/26.
 //
 
 import SwiftUI
-import Combine
-
-struct SavedDevice: Codable, Identifiable, Equatable {
-    var id: String { name }
-    let name: String
-    let lastConnected: Date
-}
-
-class DevicesStore: ObservableObject {
-    @Published var devices: [SavedDevice] = []
-
-    private let storageKey = "flow.savedDevices"
-
-    init() {
-        load()
-    }
-
-    func load() {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([SavedDevice].self, from: data) else {
-            devices = []
-            return
-        }
-        devices = decoded.sorted { $0.lastConnected > $1.lastConnected }
-    }
-
-    private func save() {
-        if let data = try? JSONEncoder().encode(devices) {
-            UserDefaults.standard.set(data, forKey: storageKey)
-        }
-    }
-
-    func markConnected(name: String) {
-        let device = SavedDevice(name: name, lastConnected: Date())
-        devices.removeAll { $0.name == name }
-        devices.insert(device, at: 0)
-        devices.sort { $0.lastConnected > $1.lastConnected }
-        save()
-    }
-
-    func remove(device: SavedDevice) {
-        devices.removeAll { $0.id == device.id }
-        save()
-    }
-}
 
 struct DevicesView: View {
-    @StateObject private var store = DevicesStore()
-    @ObservedObject private var connection = ConnectionManager.shared
-    @Environment(\.colorScheme) private var scheme
+    let factory: FlowViewModelFactory
+    @StateObject private var vm: DevicesViewModel
+    @StateObject private var connection = RemoteConnectionManager.shared
     @Environment(\.scenePhase) private var scenePhase
+
+    init(factory: FlowViewModelFactory = ViewModelFactory.shared) {
+        self.factory = factory
+        _vm = StateObject(wrappedValue: factory.makeDevicesViewModel())
+    }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 20) {
-                HStack {
-                    Text("Devices")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                    Spacer()
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-
-                if store.devices.isEmpty {
+                if vm.devices.isEmpty {
                     emptyState
                 } else {
                     VStack(spacing: 12) {
-                        ForEach(store.devices) { device in
+                        ForEach(vm.devices) { device in
                             deviceRow(device)
                         }
                     }
@@ -87,13 +39,11 @@ struct DevicesView: View {
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            store.load()
+            vm.reload()
             syncConnectedDevice()
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                store.load()
-            }
+            if newPhase == .active { vm.reload() }
         }
         .onChange(of: connection.state) { _, _ in
             syncConnectedDevice()
@@ -101,8 +51,7 @@ struct DevicesView: View {
     }
 
     private func syncConnectedDevice() {
-        guard connection.state == .connected, let peer = connection.connectedPeer else { return }
-        store.markConnected(name: peer.deviceName)
+        vm.syncConnectedDevice(linkID: connection.connectedLinkID)
     }
 
     private var emptyState: some View {
@@ -127,7 +76,7 @@ struct DevicesView: View {
     }
 
     private func deviceRow(_ device: SavedDevice) -> some View {
-        let isThisDeviceConnected = connection.state == .connected && connection.connectedPeer?.deviceName == device.name
+        let isThisDeviceConnected = connection.connectedLinkID == device.linkID
 
         return GlassCard(cornerRadius: 16, padding: 16) {
             HStack(spacing: 14) {
@@ -163,19 +112,20 @@ struct DevicesView: View {
                 }
 
                 Spacer()
+            }
+        }
+        .contextMenu {
+            Button {
+                vm.connect(device)
+            } label: {
+                Label("Connect", systemImage: "personalhotspot")
+            }
+            .disabled(isThisDeviceConnected)
 
-                if !isThisDeviceConnected {
-                    Button {
-                        store.remove(device: device)
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.red.opacity(0.8))
-                            .frame(width: 36, height: 36)
-                            .background(Circle().fill(Color.red.opacity(0.08)))
-                    }
-                    .buttonStyle(.plain)
-                }
+            Button(role: .destructive) {
+                vm.remove(device)
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
     }

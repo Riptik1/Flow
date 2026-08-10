@@ -12,8 +12,8 @@ import IOKit.hid
 import ServiceManagement
 
 struct FlowMacView: View {
-    // @StateObject private var connection = ConnectionManager.shared
-    @StateObject private var connection = RemoteConnectionManager.shared
+    @StateObject private var connection = FlowConnectionRepository.shared
+    @StateObject private var pairing = RemotePairingViewModel.shared
     @State private var hoveredRow: UUID? = nil
     @State private var permissions: [MacPermission] = Self.buildPermissions()
     @Environment(\.colorScheme) private var scheme
@@ -24,6 +24,7 @@ struct FlowMacView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 20) {
                     deviceCard
+                    remoteAccessCard
                     permissionsList
                 }
                 .padding(.horizontal, 28)
@@ -33,10 +34,9 @@ struct FlowMacView: View {
         }
         .frame(minWidth: 620, minHeight: 540)
         .onAppear {
-            // if FlowShouldAutoSearch {
-            //     ConnectionManager.shared.startAutoConnect()
-            // }
-            connection.startAutoConnect()
+            if FlowShouldAutoSearch {
+                connection.startAutoConnect()
+            }
             refreshPermissions()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -71,16 +71,19 @@ struct FlowMacView: View {
                         .foregroundStyle(.green)
                 }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(connection.pairedPeer?.peerName ?? "")
+                    Text(connection.connectedPeer?.deviceName ?? "")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(.primary)
-                    Text("Paired remotely")
+                    Text("\(connection.connectedPeer?.deviceModel ?? "") · \(connectionKindLabel)")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 10) {
-                    MiniPill(icon: "antenna.radiowaves.left.and.right", text: "Connected")
-                    Button(action: { connection.revokeCurrentPair() }) {
+                    if let battery = connection.connectedPeer?.batteryLevel, battery >= 0 {
+                        MiniPill(icon: batteryIcon(for: battery), text: "\(Int(battery))%")
+                    }
+                    MiniPill(icon: connection.connectedPeer?.transport == .remote ? "globe" : "wifi", text: connectionKindLabel)
+                    Button(action: { connection.disconnect() }) {
                         Text("Disconnect")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.red.opacity(0.85))
@@ -102,6 +105,10 @@ struct FlowMacView: View {
         .padding(.vertical, 20)
     }
 
+    private var connectionKindLabel: String {
+        connection.connectedPeer?.transport == .remote ? "Remote" : "Same Wi‑Fi"
+    }
+
     @ViewBuilder
     private var deviceOverlay: some View {
         switch connection.state {
@@ -111,14 +118,13 @@ struct FlowMacView: View {
                     .font(.system(size: 28, weight: .light))
                     .foregroundStyle(.secondary)
                 Button(action: {
-                    // FlowShouldAutoSearch = true
-                    // ConnectionManager.shared.startSearching()
-                    connection.beginPairingAsOwner()
+                    FlowShouldAutoSearch = true
+                    connection.startSearching()
                 }) {
                     HStack(spacing: 7) {
-                        Image(systemName: "qrcode")
+                        Image(systemName: "dot.radiowaves.left.and.right")
                             .font(.system(size: 13, weight: .semibold))
-                        Text("Generate Pairing Code")
+                        Text("Search for iPhone")
                             .font(.system(size: 13, weight: .semibold))
                     }
                     .foregroundStyle(.white)
@@ -134,34 +140,26 @@ struct FlowMacView: View {
 
         case .searching:
             VStack(spacing: 14) {
-                if let code = connection.pairingCode {
-                    VStack(spacing: 8) {
-                        Text("Enter this code on your iPhone")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-                        Text(code)
-                            .font(.system(size: 30, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.primary)
-                            .tracking(4)
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("Waiting for iPhone…")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } else {
+                if connection.discoveredPeers.isEmpty {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
-                        Text("Generating code…")
+                        Text("Searching for iPhone…")
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
+                } else {
+                    VStack(spacing: 8) {
+                        Text("Found nearby")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        ForEach(connection.discoveredPeers) { peer in
+                            PeerRow(peer: peer) { connection.connect(to: peer) }
+                        }
+                    }
                 }
                 Button(action: {
-                    // FlowShouldAutoSearch = false
-                    // ConnectionManager.shared.cancelSearching()
-                    connection.cancelPairing()
+                    FlowShouldAutoSearch = false
+                    connection.cancelSearching()
                 }) {
                     Text("Cancel")
                 }
@@ -185,6 +183,76 @@ struct FlowMacView: View {
         case .connected:
             EmptyView()
         }
+    }
+
+    private var remoteAccessCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "network")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("Remote Access")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+
+            if let code = pairing.pairingCode {
+                VStack(spacing: 10) {
+                    Text(code)
+                        .font(.system(size: 30, weight: .bold, design: .monospaced))
+                        .tracking(6)
+                        .foregroundStyle(.primary)
+                    Text("Expires in \(pairing.remainingSeconds)s · Enter this on your iPhone")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Button(action: { pairing.generateCode() }) {
+                        Text("New Code")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+            } else {
+                Button(action: { pairing.generateCode() }) {
+                    HStack(spacing: 7) {
+                        if pairing.isBusy {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "qrcode")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        Text(pairing.isBusy ? "Generating…" : "Generate Pairing Code")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 9)
+                    .background(Capsule().fill(Color.blue))
+                }
+                .buttonStyle(.plain)
+                .disabled(pairing.isBusy)
+            }
+
+            if let error = pairing.errorMessage {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+            }
+
+            Button(action: { pairing.reset() }) {
+                Text("Reset this device's pairing")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var permissionsList: some View {
@@ -369,43 +437,43 @@ struct FlowMacView: View {
                     }
                 }
             ),
-            MacPermission(
-                title: "Full Disk Access",
-                detail: "Browse and open any file including Documents, Downloads and developer folders. Tap to add Flow manually via the + button.",
-                icon: "externaldrive",
-                enables: ["All Files", "Documents", "Downloads", "Developer Files"],
-                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
-                isGranted: FileManager.default.isReadableFile(atPath: NSHomeDirectory() + "/Library/Safari/Bookmarks.plist"),
-                checkGranted: { FileManager.default.isReadableFile(atPath: NSHomeDirectory() + "/Library/Safari/Bookmarks.plist") },
-                requestAccess: { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!) }
-            ),
-            MacPermission(
-                title: "Automation",
-                detail: "Controls Finder, Terminal and Spotlight. Toggle to trigger the permission prompt, then allow Flow in the dialog.",
-                icon: "terminal",
-                enables: ["Terminal", "Search", "Finder", "Developer Tools"],
-                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
-                isGranted: false,
-                checkGranted: { false },
-                requestAccess: {
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        let script = NSAppleScript(source: "tell application \"Finder\" to return name of startup disk")
-                        var err: NSDictionary?
-                        script?.executeAndReturnError(&err)
-                        if err != nil {
-                            DispatchQueue.main.async {
-                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
-                            }
-                        }
-                    }
-                }
-            )
+//            MacPermission(
+//                title: "Full Disk Access",
+//                detail: "Browse and open any file including Documents, Downloads and developer folders. Tap to add Flow manually via the + button.",
+//                icon: "externaldrive",
+//                enables: ["All Files", "Documents", "Downloads", "Developer Files"],
+//                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+//                isGranted: FileManager.default.isReadableFile(atPath: NSHomeDirectory() + "/Library/Safari/Bookmarks.plist"),
+//                checkGranted: { FileManager.default.isReadableFile(atPath: NSHomeDirectory() + "/Library/Safari/Bookmarks.plist") },
+//                requestAccess: { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!) }
+//            ),
+//            MacPermission(
+//                title: "Automation",
+//                detail: "Controls Finder, Terminal and Spotlight. Toggle to trigger the permission prompt, then allow Flow in the dialog.",
+//                icon: "terminal",
+//                enables: ["Terminal", "Search", "Finder", "Developer Tools"],
+//                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+//                isGranted: false,
+//                checkGranted: { false },
+//                requestAccess: {
+//                    DispatchQueue.global(qos: .userInitiated).async {
+//                        let script = NSAppleScript(source: "tell application \"Finder\" to return name of startup disk")
+//                        var err: NSDictionary?
+//                        script?.executeAndReturnError(&err)
+//                        if err != nil {
+//                            DispatchQueue.main.async {
+//                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
+//                            }
+//                        }
+//                    }
+//                }
+//            )
         ]
     }
 }
 
 private struct PeerRow: View {
-    let peer: DiscoveredPeer
+    let peer: FlowPeer
     let onConnect: () -> Void
     @State private var isHovered = false
 

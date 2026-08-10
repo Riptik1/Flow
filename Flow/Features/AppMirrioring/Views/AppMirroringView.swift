@@ -5,7 +5,6 @@
 //  Created by Riptik Jhajhria on 06/07/26.
 //
 
-
 import SwiftUI
 
 struct AppMirroringView: View {
@@ -15,14 +14,19 @@ struct AppMirroringView: View {
     let factory: FlowViewModelFactory
 
     @StateObject private var viewModel: AppMirroringViewModel
+    @ObservedObject private var access = PremiumAccessManager.shared
     @State private var zoomScale: CGFloat = 1.0
     @State private var zoomOffset: CGSize = .zero
+    @State private var lastOrientationWasLandscape: Bool?
+    @State private var lastAppliedCaptureAspect: CGFloat = 0
+    @State private var isZoomLocked = false
+    @State private var showSubscription = false
 
     private let minZoom: CGFloat = 1.0
     private let maxZoom: CGFloat = 8.0
 
     init(bundleID: String, appName: String, onClose: @escaping () -> Void,
-         factory: FlowViewModelFactory = DefaultFlowViewModelFactory.shared) {
+         factory: FlowViewModelFactory = ViewModelFactory.shared) {
         self.bundleID = bundleID
         self.appName = appName
         self.onClose = onClose
@@ -31,128 +35,147 @@ struct AppMirroringView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                Color.black.ignoresSafeArea()
+        CardOverlay(state: access.overlayState, cornerRadius: 0, onAction: { showSubscription = true }) {
+            GeometryReader { geo in
+                ZStack {
+                    Color.black.ignoresSafeArea()
 
-                if let error = viewModel.errorMessage {
-                    errorView(error)
-                } else {
-                    FrameLayerView(renderer: viewModel.renderer)
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .scaleEffect(zoomScale, anchor: .topLeading)
-                        .offset(zoomOffset)
-                        .ignoresSafeArea()
-                        .opacity(viewModel.hasReceivedFrame ? 1 : 0)
+                    if let error = viewModel.errorMessage {
+                        errorView(error)
+                    } else {
+                        FrameLayerView(renderer: viewModel.renderer)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .scaleEffect(zoomScale, anchor: .topLeading)
+                            .offset(zoomOffset)
+                            .ignoresSafeArea()
+                            .opacity(viewModel.hasReceivedFrame ? 1 : 0)
 
-                    if !viewModel.hasReceivedFrame {
-                        loadingView
+                        if !viewModel.hasReceivedFrame {
+                            loadingView
+                        }
+                    }
+
+                    MirrorControlLayer(
+                        containerSize: geo.size,
+                        captureAspect: viewModel.captureAspect,
+                        showKeyboard: viewModel.showKeyboard,
+                        onTap: { rawPt in
+                            let pt = unzoomedPoint(rawPt)
+                            viewModel.sendTap(location: pt, viewSize: geo.size)
+                        },
+                        onDoubleTap: { rawPt in
+                            let pt = unzoomedPoint(rawPt)
+                            viewModel.sendDoubleTap(location: pt, viewSize: geo.size)
+                        },
+                        onRightClick: { rawPt in
+                            let pt = unzoomedPoint(rawPt)
+                            viewModel.sendRightClick(location: pt, viewSize: geo.size)
+                        },
+                        onDragBegan: { rawPt in
+                            let pt = unzoomedPoint(rawPt)
+                            viewModel.sendTouch(phase: 0, location: pt, viewSize: geo.size)
+                        },
+                        onDragMoved: { rawPt in
+                            let pt = unzoomedPoint(rawPt)
+                            viewModel.sendTouch(phase: 1, location: pt, viewSize: geo.size)
+                        },
+                        onDragEnded: { rawPt in
+                            let pt = unzoomedPoint(rawPt)
+                            viewModel.sendTouch(phase: 2, location: pt, viewSize: geo.size)
+                        },
+                        onSelectionBegan: { rawPt in
+                            let pt = unzoomedPoint(rawPt)
+                            viewModel.sendTouch(phase: 0, location: pt, viewSize: geo.size)
+                        },
+                        onSelectionMoved: { rawPt in
+                            let pt = unzoomedPoint(rawPt)
+                            viewModel.sendTouch(phase: 1, location: pt, viewSize: geo.size)
+                        },
+                        onSelectionEnded: { rawPt in
+                            let pt = unzoomedPoint(rawPt)
+                            viewModel.sendTouch(phase: 2, location: pt, viewSize: geo.size)
+                            viewModel.selectionMenuLocation = rawPt
+                        },
+                        onScroll: { dx, dy in
+                            if isZoomLocked {
+                                viewModel.sendScroll(deltaX: dx, deltaY: dy)
+                            } else if zoomScale > 1.05 {
+                                let raw = CGSize(
+                                    width: zoomOffset.width + dx,
+                                    height: zoomOffset.height + dy
+                                )
+                                zoomOffset = clampedOffset(raw, scale: zoomScale, in: geo.size)
+                            } else {
+                                viewModel.sendScroll(deltaX: dx, deltaY: dy)
+                            }
+                        },
+                        onPinchChanged: { delta, anchor in
+                            guard !isZoomLocked else { return }
+                            let newScale = (zoomScale * delta).clamped(to: minZoom...maxZoom)
+                            let effectiveDelta = newScale / zoomScale
+                            let p = CGPoint(x: anchor.x * geo.size.width, y: anchor.y * geo.size.height)
+                            let newOffset = CGSize(
+                                width: p.x * (1 - effectiveDelta) + zoomOffset.width * effectiveDelta,
+                                height: p.y * (1 - effectiveDelta) + zoomOffset.height * effectiveDelta
+                            )
+                            zoomScale = newScale
+                            zoomOffset = clampedOffset(newOffset, scale: newScale, in: geo.size)
+                        },
+                        onPinchEnded: {
+                            guard !isZoomLocked else { return }
+                            if zoomScale < 1.1 {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                    zoomScale = 1.0; zoomOffset = .zero
+                                }
+                            }
+                        },
+                        onKey: { code, mods, pressed in
+                            viewModel.sendKey(keyCode: Int(code.rawValue), modifiers: mods, pressed: pressed)
+                        },
+                        onText: { text in
+                            viewModel.sendText(text)
+                        }
+                    )
+                    .frame(width: geo.size.width, height: geo.size.height)
+
+                    if let loc = viewModel.selectionMenuLocation {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { viewModel.selectionMenuLocation = nil }
+                            .ignoresSafeArea()
+
+                        SelectionActionMenu(
+                            onCopy: { viewModel.copySelection() },
+                            onCut: { viewModel.cutSelection() },
+                            onShare: { viewModel.shareSelection() }
+                        )
+                        .position(
+                            x: min(max(loc.x, 90), geo.size.width - 90),
+                            y: max(loc.y - 46, 40)
+                        )
                     }
                 }
-
-                MirrorControlLayer(
-                    containerSize: geo.size,
-                    captureAspect: viewModel.captureAspect,
-                    showKeyboard: viewModel.showKeyboard,
-                    onTap: { rawPt in
-                        let pt = unzoomedPoint(rawPt)
-                        viewModel.sendTap(location: pt, viewSize: geo.size)
-                    },
-                    onDoubleTap: { rawPt in
-                        let pt = unzoomedPoint(rawPt)
-                        viewModel.sendDoubleTap(location: pt, viewSize: geo.size)
-                    },
-                    onRightClick: { rawPt in
-                        let pt = unzoomedPoint(rawPt)
-                        viewModel.sendRightClick(location: pt, viewSize: geo.size)
-                    },
-                    onDragBegan: { rawPt in
-                        let pt = unzoomedPoint(rawPt)
-                        viewModel.sendTouch(phase: 0, location: pt, viewSize: geo.size)
-                    },
-                    onDragMoved: { rawPt in
-                        let pt = unzoomedPoint(rawPt)
-                        viewModel.sendTouch(phase: 1, location: pt, viewSize: geo.size)
-                    },
-                    onDragEnded: { rawPt in
-                        let pt = unzoomedPoint(rawPt)
-                        viewModel.sendTouch(phase: 2, location: pt, viewSize: geo.size)
-                    },
-                    onSelectionBegan: { rawPt in
-                        let pt = unzoomedPoint(rawPt)
-                        viewModel.sendTouch(phase: 0, location: pt, viewSize: geo.size)
-                    },
-                    onSelectionMoved: { rawPt in
-                        let pt = unzoomedPoint(rawPt)
-                        viewModel.sendTouch(phase: 1, location: pt, viewSize: geo.size)
-                    },
-                    onSelectionEnded: { rawPt in
-                        let pt = unzoomedPoint(rawPt)
-                        viewModel.sendTouch(phase: 2, location: pt, viewSize: geo.size)
-                        viewModel.selectionMenuLocation = rawPt
-                    },
-                    onScroll: { dx, dy in
-                        if zoomScale > 1.05 {
-                            let raw = CGSize(
-                                width: zoomOffset.width + dx,
-                                height: zoomOffset.height + dy
-                            )
-                            zoomOffset = clampedOffset(raw, scale: zoomScale, in: geo.size)
-                        } else {
-                            viewModel.sendScroll(deltaX: dx, deltaY: dy)
-                        }
-                    },
-                    onPinchChanged: { delta, anchor in
-                        let newScale = (zoomScale * delta).clamped(to: minZoom...maxZoom)
-                        let effectiveDelta = newScale / zoomScale
-                        let p = CGPoint(x: anchor.x * geo.size.width, y: anchor.y * geo.size.height)
-                        let newOffset = CGSize(
-                            width: p.x * (1 - effectiveDelta) + zoomOffset.width * effectiveDelta,
-                            height: p.y * (1 - effectiveDelta) + zoomOffset.height * effectiveDelta
-                        )
-                        zoomScale = newScale
-                        zoomOffset = clampedOffset(newOffset, scale: newScale, in: geo.size)
-                    },
-                    onPinchEnded: {
-                        if zoomScale < 1.1 {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                                zoomScale = 1.0; zoomOffset = .zero
-                            }
-                        }
-                    },
-                    onKey: { code, mods, pressed in
-                        viewModel.sendKey(keyCode: Int(code.rawValue), modifiers: mods, pressed: pressed)
-                    },
-                    onText: { text in
-                        viewModel.sendText(text)
-                    }
-                )
-                .frame(width: geo.size.width, height: geo.size.height)
-
-                if let loc = viewModel.selectionMenuLocation {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture { viewModel.selectionMenuLocation = nil }
-                        .ignoresSafeArea()
-
-                    SelectionActionMenu(
-                        onCopy: { viewModel.copySelection() },
-                        onCut: { viewModel.cutSelection() },
-                        onShare: { viewModel.shareSelection() }
-                    )
-                    .position(
-                        x: min(max(loc.x, 90), geo.size.width - 90),
-                        y: max(loc.y - 46, 40)
-                    )
+                .onChange(of: geo.size) { _, newSize in
+                    handleContainerSizeChange(newSize)
+                }
+                .onChange(of: viewModel.captureAspect) { _, _ in
+                    handleContainerSizeChange(geo.size)
                 }
             }
+            .ignoresSafeArea()
         }
-        .ignoresSafeArea()
-        .onAppear { viewModel.startMirroring(bundleID: bundleID) }
+        .onAppear {
+            guard access.hasPremiumAccess else { return }
+            viewModel.startMirroring(bundleID: bundleID)
+        }
         .onDisappear { viewModel.stopMirroring() }
         .onChange(of: bundleID) { _, newBundleID in
             zoomScale = 1.0
             zoomOffset = .zero
+            lastOrientationWasLandscape = nil
+            lastAppliedCaptureAspect = 0
+            isZoomLocked = false
+            guard access.hasPremiumAccess else { return }
             viewModel.switchApp(to: newBundleID)
         }
         .sheet(isPresented: Binding(
@@ -173,15 +196,20 @@ struct AppMirroringView: View {
                 }
                 if zoomScale > 1.05 {
                     Button {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                            zoomScale = 1.0; zoomOffset = .zero
+                        if isZoomLocked {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                zoomScale = 1.0; zoomOffset = .zero
+                            }
+                            isZoomLocked = false
+                        } else {
+                            isZoomLocked = true
                         }
                     } label: {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        Image(systemName: isZoomLocked ? "lock.fill" : "lock.open")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(width: 36, height: 36)
-                            .background(Color.black.opacity(0.5))
+                            .background(isZoomLocked ? Color.blue.opacity(0.7) : Color.black.opacity(0.5))
                             .clipShape(Circle())
                     }
                     .transition(.scale.combined(with: .opacity))
@@ -218,6 +246,45 @@ struct AppMirroringView: View {
             .padding(.top, 16).padding(.leading, 16)
         }
         .statusBar(hidden: true)
+        .sheet(isPresented: $showSubscription) {
+            NavigationStack { SubscriptionView(factory: factory) }
+        }
+    }
+
+    private func handleContainerSizeChange(_ size: CGSize) {
+        guard size.width > 0, size.height > 0, !isZoomLocked else { return }
+        let isLandscape = size.width > size.height
+        let aspectChanged = viewModel.captureAspect != lastAppliedCaptureAspect
+        let orientationChanged = isLandscape != lastOrientationWasLandscape
+        guard orientationChanged || (isLandscape && aspectChanged) else { return }
+        lastOrientationWasLandscape = isLandscape
+        lastAppliedCaptureAspect = viewModel.captureAspect
+
+        guard isLandscape, viewModel.captureAspect > 0 else {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                zoomScale = 1.0
+                zoomOffset = .zero
+            }
+            return
+        }
+
+        let scale = coverScale(containerSize: size, captureAspect: viewModel.captureAspect)
+            .clamped(to: minZoom...maxZoom)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            zoomScale = scale
+            zoomOffset = clampedOffset(coverOffset(scale: scale, in: size), scale: scale, in: size)
+        }
+    }
+
+    private func coverScale(containerSize: CGSize, captureAspect: CGFloat) -> CGFloat {
+        guard captureAspect > 0 else { return 1.0 }
+        let containerAspect = containerSize.width / containerSize.height
+        let ratio = containerAspect / captureAspect
+        return ratio > 1 ? ratio : 1 / ratio
+    }
+
+    private func coverOffset(scale: CGFloat, in size: CGSize) -> CGSize {
+        CGSize(width: size.width * (1 - scale) / 2, height: 0)
     }
 
     private func unzoomedPoint(_ pt: CGPoint) -> CGPoint {

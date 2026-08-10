@@ -1,4 +1,12 @@
+//
+//  SubscriptionViewModel.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import SwiftUI
+import Combine
 
 final class SubscriptionViewModel: ObservableObject {
     @AppStorage("flow.subscriptionTier") var subTier: String = "monthly"
@@ -18,27 +26,31 @@ final class SubscriptionViewModel: ObservableObject {
 
     func select(_ tier: PlanTier) {
         switch tier {
-        case .free:
-            subTier = "none"
-            subEndDate = ""
+        case .weekly:
+            subTier = "weekly"
+            setExpiry(byAdding: .day, value: 7)
         case .monthly:
             subTier = "monthly"
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            let endDate = Calendar.current.date(byAdding: .month, value: 1, to: Date())!
-            subEndDate = formatter.string(from: endDate)
+            setExpiry(byAdding: .month, value: 1)
         case .lifetime:
             subTier = "lifetime"
             subEndDate = ""
         }
     }
 
+    private func setExpiry(byAdding component: Calendar.Component, value: Int) {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        let endDate = Calendar.current.date(byAdding: component, value: value, to: Date())!
+        subEndDate = formatter.string(from: endDate)
+    }
+
     func buttonLabel(for tier: PlanTier, isCurrent: Bool) -> String {
         if isCurrent {
-            return tier == .free ? "Current Plan" : (tier == .lifetime ? "Owned" : "Subscribed")
+            return tier == .lifetime ? "Owned" : "Subscribed"
         }
         switch tier {
-        case .free: return "Switch to Free"
+        case .weekly: return "Subscribe"
         case .monthly: return "Subscribe"
         case .lifetime: return "Purchase"
         }

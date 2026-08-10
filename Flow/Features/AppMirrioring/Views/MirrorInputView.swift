@@ -1,3 +1,10 @@
+//
+//  MirrorInputView.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import Combine
 import Network
 import SwiftUI
@@ -40,6 +47,11 @@ final class MirrorInputView: UIView, UIGestureRecognizerDelegate {
     private var _inputText = ""
     private var isDragging = false
     private var isSelecting = false
+
+    private enum TwoFingerMode { case undetermined, pan, pinch }
+    private var twoFingerMode: TwoFingerMode = .undetermined
+    private let pinchEngageThreshold: CGFloat = 0.06
+    private let panEngageThreshold: CGFloat = 10
 
     override var canBecomeFirstResponder: Bool { true }
     override var canResignFirstResponder: Bool { true }
@@ -106,6 +118,29 @@ final class MirrorInputView: UIView, UIGestureRecognizerDelegate {
         twoFingerTapGesture.require(toFail: twoFingerDoubleTapGesture)
     }
 
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        if event?.allTouches?.count == 2 {
+            twoFingerMode = .undetermined
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        let remaining = event?.allTouches?.filter { $0.phase != .ended && $0.phase != .cancelled }.count ?? 0
+        if remaining < 2 {
+            twoFingerMode = .undetermined
+        }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        let remaining = event?.allTouches?.filter { $0.phase != .ended && $0.phase != .cancelled }.count ?? 0
+        if remaining < 2 {
+            twoFingerMode = .undetermined
+        }
+    }
+
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         if g is UIPinchGestureRecognizer || other is UIPinchGestureRecognizer { return true }
         if (g == scrollGesture && other == twoFingerTapGesture) || (g == twoFingerTapGesture && other == scrollGesture) { return true }
@@ -148,8 +183,17 @@ final class MirrorInputView: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc private func handleScroll(_ g: UIPanGestureRecognizer) {
-        guard g.numberOfTouches == 2 else { return }
+        guard g.numberOfTouches == 2, g.state == .changed else { return }
+        if twoFingerMode == .pinch {
+            g.setTranslation(.zero, in: self)
+            return
+        }
         let t = g.translation(in: self)
+        if twoFingerMode == .undetermined {
+            guard hypot(t.x, t.y) > panEngageThreshold else { return }
+            twoFingerMode = .pan
+        }
+        guard twoFingerMode == .pan else { return }
         g.setTranslation(.zero, in: self)
         onScroll?(t.x, t.y)
     }
@@ -180,11 +224,16 @@ final class MirrorInputView: UIView, UIGestureRecognizerDelegate {
             accumulatedPinchScale = g.scale
             pinchEngaged = false
         case .changed:
-            if !pinchEngaged {
-                guard abs(g.scale - 1.0) > 0.045 else { return }
-                pinchEngaged = true
+            if twoFingerMode == .pan {
                 accumulatedPinchScale = g.scale
+                return
             }
+            if twoFingerMode == .undetermined {
+                guard abs(g.scale - 1.0) > pinchEngageThreshold else { return }
+                twoFingerMode = .pinch
+            }
+            guard twoFingerMode == .pinch else { return }
+            pinchEngaged = true
             let delta = g.scale / accumulatedPinchScale
             accumulatedPinchScale = g.scale
             onPinchChanged?(delta, anchor)

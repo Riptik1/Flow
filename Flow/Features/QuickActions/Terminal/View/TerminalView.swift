@@ -10,8 +10,10 @@ import SwiftUI
 struct TerminalView: View {
     let factory: FlowViewModelFactory
     @StateObject private var store: TerminalStore
+    @ObservedObject private var access = PremiumAccessManager.shared
     @Environment(\.colorScheme) private var scheme
     @FocusState private var inputFocused: Bool
+    @State private var showSubscription = false
 
     init(factory: FlowViewModelFactory = ViewModelFactory.shared) {
         self.factory = factory
@@ -34,10 +36,12 @@ struct TerminalView: View {
         ZStack {
             bgColor.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                tabBar
-                outputArea
-                inputBar
+            CardOverlay(state: access.overlayState, cornerRadius: 0, onAction: { showSubscription = true }) {
+                VStack(spacing: 0) {
+                    tabBar
+                    outputArea
+                    inputBar
+                }
             }
         }
         .navigationTitle("")
@@ -45,6 +49,7 @@ struct TerminalView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
+                    guard access.hasPremiumAccess else { showSubscription = true; return }
                     store.addTab()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { inputFocused = true }
                 } label: {
@@ -55,11 +60,15 @@ struct TerminalView: View {
             }
         }
         .onAppear {
+            guard access.hasPremiumAccess else { return }
             let needsSession = store.activeTab?.lines.isEmpty ?? true
             if needsSession {
                 store.openSession(for: store.activeTab ?? TerminalTab(index: 1))
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { inputFocused = true }
+        }
+        .sheet(isPresented: $showSubscription) {
+            NavigationStack { SubscriptionView(factory: factory) }
         }
     }
 

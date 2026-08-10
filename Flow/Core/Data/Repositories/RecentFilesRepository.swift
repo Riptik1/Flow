@@ -1,5 +1,19 @@
+//
+//  RecentFilesRepository.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import Combine
 import Foundation
+
+protocol RecentFilesRepositoryProtocol: AnyObject {
+    var currentFiles: [RemoteFileItem] { get }
+    var filesPublisher: AnyPublisher<[RemoteFileItem], Never> { get }
+
+    func refresh(limit: Int)
+}
 
 final class RecentFilesRepository: RecentFilesRepositoryProtocol, ObservableObject {
     static let shared = RecentFilesRepository(connectionService: LiveFlowConnectionService.shared)

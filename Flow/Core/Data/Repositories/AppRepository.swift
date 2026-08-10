@@ -1,6 +1,26 @@
+//
+//  AppRepository.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import Combine
 import Foundation
 import UIKit
+
+protocol AppRepositoryProtocol: AnyObject {
+    var currentApps: [MacApp] { get }
+    var appsPublisher: AnyPublisher<[MacApp], Never> { get }
+    var isFetchingApps: Bool { get }
+    var isFetchingPublisher: AnyPublisher<Bool, Never> { get }
+    var hasFetchedApps: Bool { get }
+    var iconUpdated: AnyPublisher<String, Never> { get }
+
+    func icon(for bundleID: String) -> UIImage?
+    func prefetchIfNeeded()
+    func forceRefresh()
+}
 
 final class AppRepository: AppRepositoryProtocol, ObservableObject {
     static let shared = AppRepository(connectionService: LiveFlowConnectionService.shared)
@@ -41,7 +61,13 @@ final class AppRepository: AppRepositoryProtocol, ObservableObject {
             .store(in: &cancellables)
     }
 
-    func icon(for bundleID: String) -> UIImage? { icons[bundleID] }
+    func icon(for bundleID: String) -> UIImage? {
+        if let cached = icons[bundleID] { return cached }
+        guard let data = try? Data(contentsOf: iconFile(for: bundleID)),
+              let img = UIImage(data: data) else { return nil }
+        icons[bundleID] = img
+        return img
+    }
 
     func prefetchIfNeeded() {
         guard !hasFetchedApps, !isFetchingApps, connectionService.isConnected else { return }

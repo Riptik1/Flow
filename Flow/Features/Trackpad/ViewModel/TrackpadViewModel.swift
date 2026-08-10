@@ -5,8 +5,8 @@
 //  Created by Riptik Jhajhria on 04/07/26.
 //
 
-
 import SwiftUI
+import Combine
 
 final class TrackpadViewModel: ObservableObject {
     @AppStorage("hasSeenTrackpadInstructions") var hasSeenInstructions = false

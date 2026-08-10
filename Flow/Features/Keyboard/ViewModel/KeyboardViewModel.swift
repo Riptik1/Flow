@@ -1,3 +1,10 @@
+//
+//  KeyboardViewModel.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 04/07/26.
+//
+
 import Combine
 import SwiftUI
 
@@ -108,6 +115,7 @@ final class KeyboardViewModel: ObservableObject {
     }
 
     func forceLandscape() {
+        AppDelegate.orientationLock = .landscape
         if #available(iOS 16.0, *) {
             guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { _ in }
@@ -115,6 +123,15 @@ final class KeyboardViewModel: ObservableObject {
         } else {
             UIDevice.current.setValue(UIInterfaceOrientation.landscapeRight.rawValue, forKey: "orientation")
             UINavigationController.attemptRotationToDeviceOrientation()
+        }
+    }
+
+    func unlockOrientation() {
+        AppDelegate.orientationLock = .all
+        if #available(iOS 16.0, *) {
+            guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .all)) { _ in }
+            scene.windows.first?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         }
     }
 

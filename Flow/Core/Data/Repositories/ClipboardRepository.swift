@@ -1,5 +1,21 @@
+//
+//  ClipboardRepository.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import Combine
 import Foundation
+
+protocol ClipboardRepositoryProtocol: AnyObject {
+    var currentItems: [ClipboardItem] { get }
+    var itemsPublisher: AnyPublisher<[ClipboardItem], Never> { get }
+    var isRefreshingPublisher: AnyPublisher<Bool, Never> { get }
+
+    func refresh()
+    func delete(_ item: ClipboardItem)
+}
 
 final class ClipboardRepository: ClipboardRepositoryProtocol, ObservableObject {
     static let shared = ClipboardRepository(connectionService: LiveFlowConnectionService.shared)

@@ -1,5 +1,22 @@
+//
+//  WorkflowRepository.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import Combine
 import Foundation
+
+protocol WorkflowRepositoryProtocol: AnyObject {
+    var currentWorkflows: [AppWorkflow] { get }
+    var workflowsPublisher: AnyPublisher<[AppWorkflow], Never> { get }
+
+    func add(_ workflow: AppWorkflow)
+    func update(_ workflow: AppWorkflow)
+    func delete(_ workflow: AppWorkflow)
+    func usedBackTapKinds(excluding id: UUID?) -> Set<BackTapKind>
+}
 
 final class WorkflowRepository: WorkflowRepositoryProtocol, ObservableObject {
     static let shared = WorkflowRepository()

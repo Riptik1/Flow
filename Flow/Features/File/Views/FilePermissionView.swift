@@ -31,8 +31,8 @@ struct FilePermissionView: View {
             }
 
             VStack(alignment: .leading, spacing: 20) {
-                PermissionRow(icon: "externaldrive.fill", title: "Full Disk Access", description: "Browse all files and protected folders")
-                PermissionRow(icon: "terminal.fill", title: "Automation", description: "Control Finder and system applications")
+                FilePermissionRow(icon: "externaldrive.fill", title: "Full Disk Access", description: "Browse all files and protected folders")
+                FilePermissionRow(icon: "terminal.fill", title: "Automation", description: "Control Finder and system applications")
             }
             .padding(.horizontal, 24)
             .padding(.top, 8)
@@ -75,13 +75,13 @@ struct FilePermissionView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 32)
         }
-        .onChange(of: store.permissionGranted) { granted in
+        .onChange(of: store.permissionGranted) { granted, _ in
             if granted { dismiss() }
         }
     }
 }
 
-private struct PermissionRow: View {
+struct FilePermissionRow: View {
     let icon: String
     let title: String
     let description: String

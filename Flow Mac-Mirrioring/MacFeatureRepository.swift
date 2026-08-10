@@ -1,3 +1,11 @@
+//
+//  MacFeatureRepository.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 16/07/26.
+//
+
+
 #if canImport(AppKit)
 import Foundation
 
@@ -13,7 +21,7 @@ final class MacFeatureRepository {
         FileService.shared.handle(message, reply: reply)
         TerminalService.shared.handle(message, reply: reply)
         MacUnlockService.shared.handle(message, reply: reply)
-        AppMirroringService.shared.handle(message, reply: reply)
+        RemoteAppMirroringHost.shared.handle(message, reply: reply)
     }
 }
 #endif

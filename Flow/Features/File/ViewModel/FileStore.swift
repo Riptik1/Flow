@@ -16,10 +16,12 @@ final class FileStore: ObservableObject {
     @Published var permissionGranted = false
     @Published var missingPermissions: [String] = []
 
+    private let connectionService: FlowConnectionServicing
     private var cancellables = Set<AnyCancellable>()
 
-    init() {
-        ConnectionManager.shared.messageStream
+    init(connectionService: FlowConnectionServicing = LiveFlowConnectionService.shared) {
+        self.connectionService = connectionService
+        connectionService.messageStream
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.handle($0) }
             .store(in: &cancellables)
@@ -27,7 +29,7 @@ final class FileStore: ObservableObject {
 
     func checkPermissions() {
         isLoading = true
-        ConnectionManager.shared.send(.checkPermissions)
+        connectionService.send(.checkPermissions)
     }
 
     func loadDirectory(_ path: String) {

@@ -1,10 +1,3 @@
-//
-//  RemotePairingView.swift
-//  Flow
-//
-//  Created by Riptik Jhajhria on 11/07/26.
-//
-
 import SwiftUI
 
 struct RemotePairingView: View {
@@ -86,13 +79,11 @@ struct RemotePairingView: View {
             }
         }
         .onChange(of: connection.state) { oldState, newState in
-            print("Flow RemotePairingView: connection.state \(oldState) -> \(newState), isSubmitting=\(isSubmitting)")
             if newState == .connected {
                 finish(success: true, message: nil)
             }
         }
         .onChange(of: connection.pairingError) { _, newError in
-            print("Flow RemotePairingView: connection.pairingError -> \(newError ?? "nil"), isSubmitting=\(isSubmitting)")
             if let newError, isSubmitting {
                 finish(success: false, message: newError)
             }
@@ -124,7 +115,6 @@ struct RemotePairingView: View {
     }
 
     private func resetDevice() {
-        print("Flow RemotePairingView.resetDevice: called")
         timeoutTask?.cancel()
         timeoutTask = nil
         isSubmitting = false
@@ -138,7 +128,6 @@ struct RemotePairingView: View {
     }
 
     private func finish(success: Bool, message: String?) {
-        print("Flow RemotePairingView.finish: success=\(success) message=\(message ?? "nil")")
         timeoutTask?.cancel()
         timeoutTask = nil
         isSubmitting = false

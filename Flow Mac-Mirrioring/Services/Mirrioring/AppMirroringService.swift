@@ -8,6 +8,7 @@
 import ScreenCaptureKit
 import CoreMedia
 import AppKit
+import ApplicationServices
 import VideoToolbox
 
 final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
@@ -61,7 +62,68 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
         }
     }
 
+    private static func refinedInputFrame(for window: SCWindow) -> CGRect {
+        let fallback = window.frame
+        guard let pid = window.owningApplication?.processID else { return fallback }
+        let axApp = AXUIElementCreateApplication(pid)
+        var windowsRef: CFTypeRef?
+        let axResult = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef)
+        guard axResult == .success, let axWindows = windowsRef as? [AXUIElement], !axWindows.isEmpty else {
+            print("[Flow][AppMirroring] refinedInputFrame: AX windows lookup FAILED result=\(axResult.rawValue) trusted=\(AXIsProcessTrusted()) pid=\(pid), falling back to rawFrame=\(fallback)")
+            return fallback
+        }
+
+        var bestFrame: CGRect?
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+
+        for axWindow in axWindows {
+            var positionRef: CFTypeRef?
+            var sizeRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &positionRef) == .success,
+                  AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef) == .success,
+                  let positionValue = positionRef, CFGetTypeID(positionValue) == AXValueGetTypeID(),
+                  let sizeValue = sizeRef, CFGetTypeID(sizeValue) == AXValueGetTypeID() else { continue }
+
+            var position = CGPoint.zero
+            var size = CGSize.zero
+            guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
+                  AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { continue }
+
+            let candidate = CGRect(origin: position, size: size)
+
+            let identityDistance = abs(candidate.origin.x - fallback.origin.x)
+                + abs(candidate.width - fallback.width)
+            guard identityDistance <= 40 else { continue }
+
+            let distance = identityDistance
+                + abs(candidate.origin.y - fallback.origin.y)
+                + abs(candidate.height - fallback.height)
+
+            if distance < bestDistance {
+                bestDistance = distance
+                bestFrame = candidate
+            }
+        }
+
+        let resolved = bestFrame ?? fallback
+        print("[Flow][AppMirroring] refinedInputFrame: rawFrame=\(fallback) resolved=\(resolved) matchedAX=\(bestFrame != nil)")
+        return resolved
+    }
+
+    private static var hasPromptedAccessibility = false
+
+    private static func ensureAccessibilityPermission() {
+        let trusted = AXIsProcessTrusted()
+        print("[Flow][AppMirroring] Accessibility permission check: trusted=\(trusted)")
+        guard !trusted, !hasPromptedAccessibility else { return }
+        hasPromptedAccessibility = true
+        let options: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+        let promptedTrusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
+        print("[Flow][AppMirroring] Accessibility permission prompt shown, trusted=\(promptedTrusted). If this stays false, grant access in System Settings > Privacy & Security > Accessibility for this app, then quit and relaunch it.")
+    }
+
     private func startMirroring(bundleID: String, reply: @escaping (FlowMessage) -> Void) {
+        Self.ensureAccessibilityPermission()
         let sessionID = UUID()
         let (oldStream, oldSession) = lock.withLockUnchecked { () -> (SCStream?, VTCompressionSession?) in
             let s = self.stream
@@ -106,8 +168,10 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
 
             guard lock.withLockUnchecked({ self.currentSessionID == sessionID }) else { return }
 
+            let inputFrame = Self.refinedInputFrame(for: window)
+
             lock.withLockUnchecked {
-                self.targetWindowFrame = window.frame
+                self.targetWindowFrame = inputFrame
                 self.currentWindowID = window.windowID
                 self.replyBlock = reply
             }
@@ -116,12 +180,12 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
                 self.startObservers(bundleID: bundleID, sessionID: sessionID)
             }
 
-            await buildStream(window: window, bundleID: bundleID, sessionID: sessionID, reply: reply)
+            await buildStream(window: window, captureFrame: inputFrame, bundleID: bundleID, sessionID: sessionID, reply: reply)
         }
     }
 
-    private func buildStream(window: SCWindow, bundleID: String, sessionID: UUID, reply: @escaping (FlowMessage) -> Void) async {
-        let frame = window.frame
+    private func buildStream(window: SCWindow, captureFrame: CGRect, bundleID: String, sessionID: UUID, reply: @escaping (FlowMessage) -> Void) async {
+        let frame = captureFrame
         let rawW = max(Int(frame.width), 2)
         let rawH = max(Int(frame.height), 2)
         let aspect = Double(rawW) / Double(rawH)
@@ -142,12 +206,14 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
             return
         }
 
-        let sourceRect = CGRect(
+        let rawSourceRect = CGRect(
             x: frame.origin.x - display.frame.origin.x,
             y: frame.origin.y - display.frame.origin.y,
             width: frame.width,
             height: frame.height
         )
+        let displayBounds = CGRect(origin: .zero, size: display.frame.size)
+        let sourceRect = rawSourceRect.intersection(displayBounds)
 
         do {
             let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
@@ -204,12 +270,14 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
               let display = Self.displayContaining(frame, in: content.displays) else { return }
 
-        let sourceRect = CGRect(
+        let rawSourceRect = CGRect(
             x: frame.origin.x - display.frame.origin.x,
             y: frame.origin.y - display.frame.origin.y,
             width: frame.width,
             height: frame.height
         )
+        let displayBounds = CGRect(origin: .zero, size: display.frame.size)
+        let sourceRect = rawSourceRect.intersection(displayBounds)
 
         let (capW, capH) = lock.withLockUnchecked { (self.currentCapW, self.currentCapH) }
         guard capW > 0, capH > 0 else { return }
@@ -284,20 +352,21 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
             guard self.lock.withLockUnchecked({ self.isRunning && self.currentSessionID == sessionID }) else { return }
             Task {
                 guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) else { return }
-                guard let best = Self.selectBestWindow(from: content.windows, bundleID: bundleID) else { return }
+                guard let best = await Self.selectBestWindow(from: content.windows, bundleID: bundleID) else { return }
 
-                let knownID = self.lock.withLockUnchecked { self.currentWindowID }
+                let knownID = await self.lock.withLockUnchecked { self.currentWindowID }
+                let refined = await Self.refinedInputFrame(for: best)
                 if best.windowID != knownID {
-                    self.lock.withLockUnchecked {
-                        self.targetWindowFrame = best.frame
+                    await self.lock.withLockUnchecked {
+                        self.targetWindowFrame = refined
                         self.currentWindowID = best.windowID
                     }
-                    await self.switchToNewWindow(window: best, bundleID: bundleID, sessionID: sessionID)
+                    await self.switchToNewWindow(window: best, captureFrame: refined, bundleID: bundleID, sessionID: sessionID)
                 } else {
-                    let previousFrame = self.lock.withLockUnchecked { self.targetWindowFrame }
-                    self.lock.withLockUnchecked { self.targetWindowFrame = best.frame }
-                    if previousFrame != best.frame {
-                        await self.updateSourceRect(for: best.frame, sessionID: sessionID)
+                    let previousFrame = await self.lock.withLockUnchecked { self.targetWindowFrame }
+                    await self.lock.withLockUnchecked { self.targetWindowFrame = refined }
+                    if previousFrame != refined {
+                        await self.updateSourceRect(for: refined, sessionID: sessionID)
                     }
                 }
             }
@@ -309,7 +378,7 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
         frameTimer = nil
     }
 
-    private func switchToNewWindow(window: SCWindow, bundleID: String, sessionID: UUID) async {
+    private func switchToNewWindow(window: SCWindow, captureFrame: CGRect, bundleID: String, sessionID: UUID) async {
         let (oldStream, oldSession) = lock.withLockUnchecked { () -> (SCStream?, VTCompressionSession?) in
             guard self.currentSessionID == sessionID else { return (nil, nil) }
             let s = self.stream
@@ -331,7 +400,7 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
         let reply = lock.withLockUnchecked { self.replyBlock }
         guard let reply else { return }
 
-        await buildStream(window: window, bundleID: bundleID, sessionID: sessionID, reply: reply)
+        await buildStream(window: window, captureFrame: captureFrame, bundleID: bundleID, sessionID: sessionID, reply: reply)
     }
 
     private func findBestWindow(bundleID: String) async throws -> SCWindow? {

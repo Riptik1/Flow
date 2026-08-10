@@ -1,4 +1,12 @@
+//
+//  ImageZoomView.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 04/07/26.
+//
+
 import SwiftUI
+import PDFKit
 
 struct ImageZoomView: UIViewControllerRepresentable {
     let image: UIImage
@@ -109,4 +117,18 @@ final class ImageZoomVC: UIViewController, UIScrollViewDelegate {
             scrollView.zoom(to: zoomRect, animated: true)
         }
     }
+}
+
+struct PDFViewer: UIViewRepresentable {
+    let url: URL
+    func makeUIView(context: Context) -> PDFView {
+        let v = PDFView()
+        v.autoScales = true
+        v.displayMode = .singlePageContinuous
+        v.displayDirection = .vertical
+        v.backgroundColor = UIColor(white: 0.08, alpha: 1)
+        v.document = PDFDocument(url: url)
+        return v
+    }
+    func updateUIView(_ uiView: PDFView, context: Context) {}
 }

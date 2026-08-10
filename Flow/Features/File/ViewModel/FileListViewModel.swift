@@ -1,3 +1,10 @@
+//
+//  FileListViewModel.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 04/07/26.
+//
+
 import Combine
 import Foundation
 import UniformTypeIdentifiers
@@ -15,6 +22,7 @@ final class FileListViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var largeFileAlert: LargeFileAlertInfo? = nil
     @Published private(set) var pendingPreviewItem: QuickLookPreviewItem? = nil
+    @Published private(set) var pendingPreviewPath: String? = nil
     @Published private(set) var pendingShareItem: ShareItem? = nil
     @Published private(set) var pendingSaveItem: ShareItem? = nil
 
@@ -22,6 +30,8 @@ final class FileListViewModel: ObservableObject {
     var reloadPath: String? = nil
     private(set) var pendingResponse: ResponseType = .none
     private var isOperationPending = false
+    private var pendingPreviewSource: FileItem? = nil
+    private var previewRequestToken: UUID? = nil
     private let connectionService: FlowConnectionServicing
     private var cancellables = Set<AnyCancellable>()
 
@@ -48,11 +58,38 @@ final class FileListViewModel: ObservableObject {
         connectionService.send(.getRecents)
     }
 
-    func previewFile(_ path: String) {
+    func previewFile(_ file: FileItem) {
         guard pendingResponse == .none else { return }
         isPendingPreview = true
         pendingResponse = .preview
-        connectionService.send(.previewFile(path: path))
+        pendingPreviewSource = file
+        pendingPreviewPath = file.path
+        let token = UUID()
+        previewRequestToken = token
+        connectionService.send(.previewFile(path: file.path))
+        schedulePreviewTimeout(token: token)
+    }
+
+    func cancelPreview() {
+        guard pendingResponse == .preview else { return }
+        isPendingPreview = false
+        pendingResponse = .none
+        pendingPreviewSource = nil
+        pendingPreviewPath = nil
+        previewRequestToken = nil
+    }
+
+    private func schedulePreviewTimeout(token: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+            guard let self else { return }
+            guard self.previewRequestToken == token, self.pendingResponse == .preview else { return }
+            self.isPendingPreview = false
+            self.pendingResponse = .none
+            self.pendingPreviewSource = nil
+            self.pendingPreviewPath = nil
+            self.previewRequestToken = nil
+            self.errorMessage = "This file is taking too long to load. Please try again."
+        }
     }
 
     func shareFile(_ path: String) {
@@ -122,7 +159,17 @@ final class FileListViewModel: ObservableObject {
             guard pendingResponse == .preview else { return }
             isPendingPreview = false
             pendingResponse = .none
-            pendingPreviewItem = QuickLookPreviewItem(data: data, uti: uti)
+            let source = pendingPreviewSource
+            pendingPreviewSource = nil
+            pendingPreviewPath = nil
+            previewRequestToken = nil
+            pendingPreviewItem = QuickLookPreviewItem(
+                data: data,
+                uti: uti,
+                fileName: source?.name ?? "File",
+                kind: source?.kind ?? .other,
+                sourcePath: source?.path ?? ""
+            )
         case .shareData(let data, let uti):
             guard pendingResponse == .share else { return }
             isPendingShare = false
@@ -143,6 +190,9 @@ final class FileListViewModel: ObservableObject {
             isPendingSave = false
             isPendingShare = false
             isOperationPending = false
+            pendingPreviewSource = nil
+            pendingPreviewPath = nil
+            previewRequestToken = nil
             let wasPreview = pendingResponse == .preview
             pendingResponse = .none
             if wasPreview && error.hasPrefix("FILE_TOO_LARGE_PREVIEW:") {

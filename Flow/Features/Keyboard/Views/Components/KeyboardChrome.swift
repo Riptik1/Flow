@@ -1,3 +1,10 @@
+//
+//  KeyboardChrome.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 04/07/26.
+//
+
 import SwiftUI
 
 struct KBCornerHintDot: View {

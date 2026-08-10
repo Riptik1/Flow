@@ -1,3 +1,10 @@
+//
+//  AppMirroringViewModel.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import Combine
 import SwiftUI
 import UIKit
@@ -11,6 +18,8 @@ final class AppMirroringViewModel: ObservableObject {
     @Published var captureAspect: CGFloat = 16.0 / 9.0
     @Published var selectionMenuLocation: CGPoint?
     @Published var shareText: String?
+
+    private var hasStartedStream = false
 
     private(set) var renderer = FrameRenderer()
 
@@ -40,7 +49,9 @@ final class AppMirroringViewModel: ObservableObject {
         statusText = "Launching app..."
         errorMessage = nil
         hasReceivedFrame = false
+        hasStartedStream = false
         captureAspect = 16.0 / 9.0
+        renderer.reset()
         connectionService.send(.startAppMirroring(bundleID: bundleID))
         scheduleTimeout()
     }
@@ -48,12 +59,19 @@ final class AppMirroringViewModel: ObservableObject {
     private func scheduleTimeout() {
         timeoutTask?.cancel()
         timeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
             guard let self, !Task.isCancelled, !self.hasReceivedFrame else { return }
-            self.statusText = "Waiting for stream..."
-            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            if !self.hasStartedStream {
+                self.statusText = "Launching app on your Mac..."
+            }
+            try? await Task.sleep(nanoseconds: 24_000_000_000)
             guard !Task.isCancelled, !self.hasReceivedFrame else { return }
-            self.errorMessage = "Connection timed out. Make sure both devices are on the same Wi-Fi network."
+            self.statusText = self.hasStartedStream
+                ? "Waiting for video from your Mac..."
+                : "Still working, this can take longer on a slow connection..."
+            try? await Task.sleep(nanoseconds: 25_000_000_000)
+            guard !Task.isCancelled, !self.hasReceivedFrame else { return }
+            self.errorMessage = "Connection timed out. Check your internet connection and try again."
         }
     }
 
@@ -62,6 +80,7 @@ final class AppMirroringViewModel: ObservableObject {
         connectionService.send(.stopAppMirroring)
         isSessionActive = false
         hasReceivedFrame = false
+        hasStartedStream = false
     }
 
     private func normalizedCoords(location: CGPoint, viewSize: CGSize) -> (Float, Float)? {
@@ -76,10 +95,14 @@ final class AppMirroringViewModel: ObservableObject {
             imageH = viewSize.width / captureAspect
             offsetY = (viewSize.height - imageH) / 2
         }
+        guard imageW > 0, imageH > 0 else { return nil }
+        let margin: CGFloat = 6
         let lx = location.x - offsetX
         let ly = location.y - offsetY
-        guard lx >= 0, lx <= imageW, ly >= 0, ly <= imageH else { return nil }
-        return (Float(lx / imageW), Float(ly / imageH))
+        guard lx >= -margin, lx <= imageW + margin, ly >= -margin, ly <= imageH + margin else { return nil }
+        let clampedX = min(max(lx, 0), imageW)
+        let clampedY = min(max(ly, 0), imageH)
+        return (Float(clampedX / imageW), Float(clampedY / imageH))
     }
 
     func sendTap(location: CGPoint, viewSize: CGSize) {
@@ -145,10 +168,12 @@ final class AppMirroringViewModel: ObservableObject {
     private func handleMessage(_ message: FlowMessage) {
         switch message {
         case .appMirroringConfig(let width, let height, _, _, _):
+            hasStartedStream = true
             captureAspect = width > 0 && height > 0 ? CGFloat(width) / CGFloat(height) : 16.0 / 9.0
             statusText = "Stream starting..."
 
         case .appMirroringStarted:
+            hasStartedStream = true
             statusText = "Receiving frames..."
 
         case .appMirroringFrame(let data, _):
@@ -158,6 +183,9 @@ final class AppMirroringViewModel: ObservableObject {
                 hasReceivedFrame = true
                 timeoutTask?.cancel()
                 timeoutTask = nil
+            }
+            if errorMessage != nil {
+                errorMessage = nil
             }
 
         case .appMirroringError(let error):

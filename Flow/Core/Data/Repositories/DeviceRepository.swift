@@ -1,5 +1,21 @@
+//
+//  DeviceRepository.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import Combine
 import Foundation
+
+protocol DeviceRepositoryProtocol: AnyObject {
+    var currentDevices: [SavedDevice] { get }
+    var devicesPublisher: AnyPublisher<[SavedDevice], Never> { get }
+
+    func reload()
+    func markConnected(linkID: UUID)
+    func remove(_ device: SavedDevice)
+}
 
 final class DeviceRepository: DeviceRepositoryProtocol, ObservableObject {
     static let shared = DeviceRepository()
@@ -10,21 +26,25 @@ final class DeviceRepository: DeviceRepositoryProtocol, ObservableObject {
     var devicesPublisher: AnyPublisher<[SavedDevice], Never> { $devices.eraseToAnyPublisher() }
 
     private let store = UserDefaultsCodableStore<[SavedDevice]>(key: "flow.savedDevices")
+    private var reloadTask: Task<Void, Never>?
 
-    init() { reload() }
-
-    func reload() {
-        guard let decoded = store.load() else {
-            devices = []
-            return
+    init() {
+        if let cached = store.load() {
+            devices = cached.sorted { $0.lastConnected > $1.lastConnected }
         }
-        devices = decoded.sorted { $0.lastConnected > $1.lastConnected }
+        reload()
     }
 
-    func markConnected(name: String) {
-        let device = SavedDevice(name: name, lastConnected: Date())
-        devices.removeAll { $0.name == name }
-        devices.insert(device, at: 0)
+    func reload() {
+        reloadTask?.cancel()
+        reloadTask = Task { [weak self] in
+            await self?.performReload()
+        }
+    }
+
+    func markConnected(linkID: UUID) {
+        guard let index = devices.firstIndex(where: { $0.linkID == linkID }) else { return }
+        devices[index].lastConnected = Date()
         devices.sort { $0.lastConnected > $1.lastConnected }
         store.save(devices)
     }
@@ -32,5 +52,44 @@ final class DeviceRepository: DeviceRepositoryProtocol, ObservableObject {
     func remove(_ device: SavedDevice) {
         devices.removeAll { $0.id == device.id }
         store.save(devices)
+    }
+
+    private func performReload() async {
+        print("[Flow][DeviceRepo] performReload: start")
+        guard let iphoneID = try? await SupabaseManager.shared.ensureSession() else {
+            print("[Flow][DeviceRepo] performReload: ensureSession FAILED")
+            return
+        }
+        guard let links = try? await FlowBackendClient.shared.fetchTrustedLinks(iphoneID: iphoneID) else {
+            print("[Flow][DeviceRepo] performReload: fetchTrustedLinks FAILED")
+            return
+        }
+        guard !Task.isCancelled else { return }
+
+        let cachedByLink = Dictionary(uniqueKeysWithValues: devices.map { ($0.linkID, $0) })
+        var resolved: [SavedDevice] = []
+        for link in links {
+            guard !Task.isCancelled else { return }
+            let info = try? await FlowBackendClient.shared.fetchMacInfo(id: link.macID)
+            let cached = cachedByLink[link.id]
+            resolved.append(
+                SavedDevice(
+                    linkID: link.id,
+                    macID: link.macID,
+                    name: info?.deviceName ?? cached?.name ?? "Mac",
+                    model: info?.deviceModel ?? cached?.model ?? "Mac",
+                    lastConnected: cached?.lastConnected ?? link.createdAt
+                )
+            )
+        }
+        guard !Task.isCancelled else { return }
+
+        let sorted = resolved.sorted { $0.lastConnected > $1.lastConnected }
+        print("[Flow][DeviceRepo] performReload: resolved \(sorted.count) device(s)")
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.devices = sorted
+            self.store.save(sorted)
+        }
     }
 }

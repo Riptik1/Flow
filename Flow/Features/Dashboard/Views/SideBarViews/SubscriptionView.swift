@@ -5,299 +5,209 @@
 //  Created by Riptik Jhajhria on 09/06/26.
 //
 
-
 import SwiftUI
 
 struct SubscriptionView: View {
+    let factory: FlowViewModelFactory
+    @StateObject private var vm: SubscriptionViewModel
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.dismiss) private var dismiss
-    @AppStorage("flow.subscriptionTier") private var subTier: String = "none"
-    @AppStorage("flow.subscriptionEndDate") private var subEndDate: String = ""
+    @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var appear = false
-    @State private var badgePulse = false
+    @State private var selection: Int
+
+    init(factory: FlowViewModelFactory = ViewModelFactory.shared) {
+        self.factory = factory
+        let vmInstance = factory.makeSubscriptionViewModel()
+        _vm = StateObject(wrappedValue: vmInstance)
+        _selection = State(initialValue: vmInstance.middleSelectionIndex())
+    }
+
+    private var activeTier: PlanTier { vm.tier(atLoopIndex: selection) }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 24) {
-                VStack(spacing: 8) {
-                    Text("Choose Your Plan")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                    Text("Unlock the full potential of Flow")
-                        .font(.system(size: 15))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.top, 20)
+        GeometryReader { proxy in
+            let isWide = hSizeClass == .regular
+            let cardWidth = isWide ? min(proxy.size.width * 0.46, 420) : min(proxy.size.width * 0.82, 380)
+            let cardHeight = min(proxy.size.height * 0.86, isWide ? 620 : 560)
 
-                VStack(spacing: 16) {
-                    freeCard
-                    monthlyCard
-                    lifetimeCard
-                }
-                .padding(.horizontal, 20)
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
 
-                Button {
-                    restorePurchases()
-                } label: {
-                    Text("Restore Purchases")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 8)
+                TabView(selection: $selection) {
+                    ForEach(0..<vm.loopCount, id: \.self) { index in
+                        let tier = vm.tier(atLoopIndex: index)
+                        planCard(for: tier, height: cardHeight)
+                            .frame(width: cardWidth)
+                            .scaleEffect(selection == index ? 1.0 : 0.9)
+                            .opacity(selection == index ? 1.0 : 0.45)
+                            .blur(radius: selection == index ? 0 : 1.5)
+                            .animation(.spring(response: 0.45, dampingFraction: 0.82), value: selection)
+                            .tag(index)
+                    }
                 }
-                .buttonStyle(.plain)
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .frame(height: cardHeight + 40)
 
-                Spacer(minLength: 40)
+                pageIndicator
+                    .padding(.top, 18)
+
+                Spacer(minLength: 0)
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .opacity(appear ? 1 : 0)
+            .scaleEffect(appear ? 1 : 0.96)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(backgroundView)
+        .navigationTitle("Subscription")
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            withAnimation(.spring(response: 0.55, dampingFraction: 0.8).delay(0.1)) {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
                 appear = true
             }
-            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-                badgePulse = true
+        }
+    }
+
+    private var backgroundView: some View {
+        ZStack {
+            Color(uiColor: .systemGroupedBackground)
+
+            LinearGradient(
+                colors: activeTier.gradient.map { $0.opacity(scheme == .dark ? 0.28 : 0.22) },
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            LinearGradient(
+                colors: [Color(uiColor: .systemGroupedBackground).opacity(0), Color(uiColor: .systemGroupedBackground)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
+        .animation(.easeInOut(duration: 0.5), value: selection)
+        .ignoresSafeArea()
+    }
+
+    private var pageIndicator: some View {
+        HStack(spacing: 8) {
+            ForEach(vm.plans, id: \.self) { tier in
+                let isActive = activeTier == tier
+                Capsule()
+                    .fill(isActive ? Color.primary.opacity(0.85) : Color.primary.opacity(0.15))
+                    .frame(width: isActive ? 22 : 7, height: 7)
+                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: selection)
             }
         }
     }
 
-    private var freeCard: some View {
-        GlassCard(cornerRadius: 20, padding: 20) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Free")
-                            .font(.system(size: 22, weight: .bold))
-                        Text("Basic remote control")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text("$0")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                }
-                .padding(.top, 4)
-
-                Divider().padding(.vertical, 14)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    featureRow("Basic remote control", active: true)
-                    featureRow("Trackpad & keyboard", active: true)
-                    featureRow("3 Workflows", active: true)
-                    featureRow("File access", active: true)
-                    featureRow("Spotlight search", active: false)
-                    featureRow("Voice commands", active: false)
-                    featureRow("Custom themes", active: false)
-                    featureRow("Priority support", active: false)
-                }
-
-                Button {
-                    selectTier("none")
-                } label: {
-                    Text("Current Plan")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.primary.opacity(0.06))
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(subTier == "none")
-                .padding(.top, 16)
-            }
-        }
-        .offset(y: appear ? 0 : 30)
-        .opacity(appear ? 1 : 0)
-    }
-
-    private var monthlyCard: some View {
-        GlassCard(cornerRadius: 20, padding: 20) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("MOST POPULAR")
-                        .font(.system(size: 10, weight: .bold))
-                        .tracking(1)
+    private func planCard(for tier: PlanTier, height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(LinearGradient(colors: tier.gradient, startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Image(systemName: tier.icon)
+                        .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(Color.blue)
-                                .opacity(badgePulse ? 1.0 : 0.7)
-                        )
-                    Spacer()
                 }
+                .frame(width: 56, height: 56)
+                .shadow(color: tier.gradient.first?.opacity(0.35) ?? .clear, radius: 14, y: 8)
 
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Monthly")
-                            .font(.system(size: 22, weight: .bold))
-                        Text("Full access, cancel anytime")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Text("$4.99")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
-                        Text("/month")
-                            .font(.system(size: 13))
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(tier.price)
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                    if let suffix = tier.priceSuffix {
+                        Text(suffix)
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                 }
-                .padding(.top, 12)
-
-                Divider().padding(.vertical, 14)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    featureRow("Everything in Free", active: true)
-                    featureRow("Unlimited workflows", active: true)
-                    featureRow("Advanced trackpad gestures", active: true)
-                    featureRow("Spotlight search", active: true)
-                    featureRow("Voice commands", active: true)
-                    featureRow("Custom themes", active: true)
-                    featureRow("Priority support", active: true)
-                    featureRow("No ads", active: true)
-                }
-
-                Button {
-                    purchaseMonthly()
-                } label: {
-                    Text(subTier == "monthly" ? "Subscribed" : "Subscribe")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(
-                                    subTier == "monthly"
-                                    ? AnyShapeStyle(Color.green)
-                                    : AnyShapeStyle(LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing))
-                                )
-                        )
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 16)
             }
+
+            Text(tier.title)
+                .font(.system(size: 26, weight: .bold, design: .rounded))
+                .padding(.top, 18)
+
+            Divider()
+                .padding(.vertical, 18)
+
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(tier.features, id: \.self) { feature in
+                    HStack(spacing: 12) {
+                        ZStack {
+                            Circle()
+                                .fill(LinearGradient(colors: tier.gradient, startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .opacity(0.16)
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(LinearGradient(colors: tier.gradient, startPoint: .topLeading, endPoint: .bottomTrailing))
+                        }
+                        .frame(width: 24, height: 24)
+
+                        Text(feature)
+                            .font(.system(size: 15, weight: .medium))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.9)
+
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+
+            Spacer(minLength: 12)
+
+            actionButton(for: tier)
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(LinearGradient(colors: [.blue.opacity(0.5), .purple.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5)
+        .padding(24)
+        .frame(height: height)
+        .background(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(.ultraThinMaterial)
         )
-        .offset(y: appear ? 0 : 30)
-        .opacity(appear ? 1 : 0)
-        .scaleEffect(appear ? 1.0 : 0.95)
-        .animation(.spring(response: 0.55, dampingFraction: 0.8).delay(0.15), value: appear)
-    }
-
-    private var lifetimeCard: some View {
-        GlassCard(cornerRadius: 20, padding: 20) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("BEST VALUE")
-                        .font(.system(size: 10, weight: .bold))
-                        .tracking(1)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(Color.orange))
-                    Spacer()
-                }
-
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Lifetime")
-                            .font(.system(size: 22, weight: .bold))
-                        Text("Pay once, own forever")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Text("$49.99")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
-                        Text("one-time")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.top, 12)
-
-                Divider().padding(.vertical, 14)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    featureRow("Everything in Monthly", active: true)
-                    featureRow("All future updates", active: true)
-                    featureRow("Lifetime priority support", active: true)
-                    featureRow("Early access to features", active: true)
-                }
-
-                Button {
-                    purchaseLifetime()
-                } label: {
-                    Text(subTier == "lifetime" ? "Owned" : "Purchase")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(
-                                    subTier == "lifetime"
-                                    ? AnyShapeStyle(Color.green)
-                                    : AnyShapeStyle(LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing))
-                                )
-                        )
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 16)
-            }
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(LinearGradient(colors: [.orange.opacity(0.5), .red.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5)
+        .background(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(Color(uiColor: .systemBackground).opacity(scheme == .dark ? 0.25 : 0.55))
         )
-        .offset(y: appear ? 0 : 30)
-        .opacity(appear ? 1 : 0)
-        .animation(.spring(response: 0.55, dampingFraction: 0.8).delay(0.25), value: appear)
+        .overlay(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.white.opacity(scheme == .dark ? 0.18 : 0.6), Color.white.opacity(0)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        )
+        .shadow(color: .black.opacity(scheme == .dark ? 0.35 : 0.1), radius: 24, y: 14)
+        .shadow(color: tier.gradient.first?.opacity(scheme == .dark ? 0.18 : 0.12) ?? .clear, radius: 30, y: 18)
     }
 
-    private func featureRow(_ text: String, active: Bool) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: active ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .font(.system(size: 16))
-                .foregroundStyle(active ? .green : .secondary.opacity(0.4))
-            Text(text)
-                .font(.system(size: 14, weight: active ? .medium : .regular))
-                .foregroundStyle(active ? .primary : .secondary)
-            Spacer()
+    @ViewBuilder
+    private func actionButton(for tier: PlanTier) -> some View {
+        let isCurrent = vm.subTier == tier.tierKey
+
+        Button {
+            vm.select(tier)
+        } label: {
+            Text(vm.buttonLabel(for: tier, isCurrent: isCurrent))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(isCurrent ? .secondary : Color.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(
+                            isCurrent
+                            ? AnyShapeStyle(Color.primary.opacity(0.06))
+                            : AnyShapeStyle(LinearGradient(colors: tier.gradient, startPoint: .leading, endPoint: .trailing))
+                        )
+                )
+                .shadow(color: isCurrent ? .clear : (tier.gradient.last?.opacity(0.4) ?? .clear), radius: 14, y: 8)
         }
-    }
-
-    private func selectTier(_ tier: String) {
-        subTier = tier
-        if tier == "none" {
-            subEndDate = ""
-        }
-    }
-
-    private func purchaseMonthly() {
-        subTier = "monthly"
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        let endDate = Calendar.current.date(byAdding: .month, value: 1, to: Date())!
-        subEndDate = formatter.string(from: endDate)
-    }
-
-    private func purchaseLifetime() {
-        subTier = "lifetime"
-        subEndDate = ""
-    }
-
-    private func restorePurchases() {
-        subTier = "none"
-        subEndDate = ""
+        .buttonStyle(.plain)
+        .disabled(isCurrent)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: vm.subTier)
     }
 }

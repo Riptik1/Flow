@@ -1,28 +1,52 @@
+//
+//  SettingsView.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 09/06/26.
+//
+
 import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.openURL) private var openURL
+    @Environment(\.horizontalSizeClass) private var hSizeClass
     @AppStorage("flow.appearance") private var appearance: String = "system"
     @AppStorage("flow.subscriptionTier") private var subTier: String = "none"
     @AppStorage("flow.subscriptionEndDate") private var subEndDate: String = ""
+    @AppStorage("flow.inputMode") private var inputMode: String = "trackpad"
     @State private var showSubscriptionDetail = false
-    @State private var showHelp = false
     @State private var showSuggest = false
-    @State private var showAboutDetail = false
+
+    private var isPad: Bool { hSizeClass == .regular }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 20) {
                 appearanceSection
 
+                controlSection
+
                 subscriptionCard
 
                 VStack(spacing: 12) {
-                    settingsRow(icon: "questionmark.circle.fill", title: "Help & Support", color: .blue) { showHelp = true }
-                    settingsRow(icon: "lightbulb.fill", title: "Suggest Improvements", color: .yellow) { showSuggest = true }
-                    settingsRow(icon: "info.circle.fill", title: "About", color: .gray) { showAboutDetail = true }
+                    Button {
+                        if let url = URL(string: "mailto:riptikjhajhria0987@gmail.com") {
+                            openURL(url)
+                        }
+                    } label: {
+                        settingsRowContent(icon: "questionmark.circle.fill", title: "Help & Support", color: .blue)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button { showSuggest = true } label: {
+                        settingsRowContent(icon: "lightbulb.fill", title: "Suggest Improvements", color: .yellow)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 20)
+
+                aboutCard
 
                 footer
             }
@@ -30,11 +54,9 @@ struct SettingsView: View {
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: $showSubscriptionDetail) { SubscriptionView() }
-        .navigationDestination(isPresented: $showHelp) { HelpSupportView() }
         .navigationDestination(isPresented: $showSuggest) { SuggestImprovementsView() }
-        .navigationDestination(isPresented: $showAboutDetail) { AboutView() }
     }
 
     private var appearanceSection: some View {
@@ -59,9 +81,7 @@ struct SettingsView: View {
         let isSelected = appearance == mode
 
         return Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                appearance = mode
-            }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { appearance = mode }
         } label: {
             VStack(spacing: 6) {
                 Image(systemName: icon)
@@ -75,6 +95,69 @@ struct SettingsView: View {
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(isSelected ? Color.blue : Color.primary.opacity(0.04))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var controlSection: some View {
+        GlassCard(cornerRadius: 16, padding: 18) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Control")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+
+                TrackpadSpeedControl()
+
+                if isPad {
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "keyboard.fill")
+                                .font(.system(size: 16))
+                                .foregroundStyle(.purple)
+                                .frame(width: 30, height: 30)
+                                .background(Circle().fill(Color.purple.opacity(0.12)))
+
+                            Text("Input Mode")
+                                .font(.system(size: 15, weight: .medium))
+
+                            Spacer()
+                        }
+
+                        HStack(spacing: 4) {
+                            inputModeButton(mode: "trackpad", icon: "trackpad", label: "Trackpad")
+                            inputModeButton(mode: "keyboardTrackpad", icon: "keyboard.badge.eye", label: "Keyboard + Trackpad")
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+
+    private func inputModeButton(mode: String, icon: String, label: String) -> some View {
+        let isSelected = inputMode == mode
+
+        return Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { inputMode = mode }
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .foregroundStyle(isSelected ? .white : .secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? Color.purple : Color.primary.opacity(0.04))
             )
         }
         .buttonStyle(.plain)
@@ -137,29 +220,49 @@ struct SettingsView: View {
         }
     }
 
-    private func settingsRow(icon: String, title: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            GlassCard(cornerRadius: 14, padding: 16) {
-                HStack(spacing: 14) {
-                    Image(systemName: icon)
-                        .font(.system(size: 20))
-                        .foregroundStyle(color)
-                        .frame(width: 36, height: 36)
-                        .background(Circle().fill(color.opacity(0.12)))
+    private func settingsRowContent(icon: String, title: String, color: Color) -> some View {
+        GlassCard(cornerRadius: 14, padding: 16) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                    .foregroundStyle(color)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(color.opacity(0.12)))
 
-                    Text(title)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.primary)
+                Text(title)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.primary)
 
-                    Spacer()
+                Spacer()
 
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
         }
-        .buttonStyle(.plain)
+    }
+
+    private var aboutCard: some View {
+        GlassCard(cornerRadius: 14, padding: 16) {
+            HStack {
+                Image("AppIcon")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Flow")
+                        .font(.system(size: 17, weight: .semibold))
+                    Text("Version 1.0.0")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 20)
     }
 
     private var footer: some View {
@@ -167,7 +270,7 @@ struct SettingsView: View {
             Image(systemName: "heart.fill")
                 .font(.system(size: 10))
                 .foregroundStyle(.red.opacity(0.7))
-            Text("Crafted with love for seamless control")
+            Text("Built with care, so your Mac feels closer than ever")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         }

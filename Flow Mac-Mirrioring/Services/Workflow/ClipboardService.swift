@@ -126,7 +126,8 @@ final class ClipboardService {
         }
         saveHistory()
         if notify {
-            ConnectionManager.shared.send(.clipboardDidChange(item: item))
+            // ConnectionManager.shared.send(.clipboardDidChange(item: item))
+            RemoteConnectionManager.shared.send(.clipboardDidChange(item: item))
         }
     }
 
@@ -180,7 +181,7 @@ final class ClipboardService {
     }
 
     private func compressImage(_ image: NSImage) -> Data? {
-        let maxDim: CGFloat = 280
+        let maxDim: CGFloat = 200
         let size = image.size
         guard size.width > 0, size.height > 0 else { return nil }
         let scale = min(maxDim / size.width, maxDim / size.height, 1.0)
@@ -194,7 +195,7 @@ final class ClipboardService {
         newImage.unlockFocus()
         guard let tiff = newImage.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
-        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: NSNumber(value: 0.60)])
+        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: NSNumber(value: 0.45)])
     }
 
     private func detectType(_ string: String) -> ClipboardContentType {

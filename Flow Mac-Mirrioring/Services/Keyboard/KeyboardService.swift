@@ -28,21 +28,9 @@ final class KeyboardService {
         case .keyPress(let keyCode, let modifiers):
             guard keyCode >= 0, keyCode <= Int(CGKeyCode.max) else { return }
             postKeyWithModifiers(CGKeyCode(keyCode), CGEventFlags(rawValue: UInt64(bitPattern: Int64(modifiers))))
-        case .typeText(let text):
-            postUnicodeString(text)
         default:
             break
         }
-    }
-
-    private func postUnicodeString(_ text: String) {
-        let utf16 = Array(text.utf16)
-        guard !utf16.isEmpty else { return }
-        guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true) else { return }
-        down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-        down.post(tap: .cghidEventTap)
-        guard let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else { return }
-        up.post(tap: .cghidEventTap)
     }
 
     private func postKeyWithModifiers(_ code: CGKeyCode, _ flags: CGEventFlags) {

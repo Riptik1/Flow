@@ -1,3 +1,10 @@
+//
+//  ClipboardView.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import SwiftUI
 
 struct ClipboardView: View {
@@ -8,7 +15,7 @@ struct ClipboardView: View {
     @State private var toast: String? = nil
     @Environment(\.colorScheme) private var cs
 
-    init(factory: FlowViewModelFactory = DefaultFlowViewModelFactory.shared) {
+    init(factory: FlowViewModelFactory = ViewModelFactory.shared) {
         self.factory = factory
         _vm = StateObject(wrappedValue: factory.makeClipboardViewModel())
     }

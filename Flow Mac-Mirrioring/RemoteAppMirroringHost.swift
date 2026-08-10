@@ -1,9 +1,17 @@
+//
+//  RemoteAppMirroringHost.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 18/07/26.
+//
+
 #if canImport(AppKit)
 import AppKit
+import ApplicationServices
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
-import WebRTC
+import VideoToolbox
 
 final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     static let shared = RemoteAppMirroringHost()
@@ -14,8 +22,21 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
     private nonisolated(unsafe) var targetWindowFrame: CGRect = .zero
     private nonisolated(unsafe) var currentWindowID: CGWindowID = 0
     private nonisolated(unsafe) var currentSessionID = UUID()
-    private nonisolated(unsafe) var transport: WebRTCVideoTransport?
-    private nonisolated(unsafe) var frameTimer: Timer?
+    private nonisolated(unsafe) var compressionSession: VTCompressionSession?
+    private nonisolated(unsafe) var replyBlock: ((FlowMessage) -> Void)?
+    private nonisolated(unsafe) var currentCapW: Int = 0
+    private nonisolated(unsafe) var currentCapH: Int = 0
+    private nonisolated(unsafe) var lastEncodedAt: CFTimeInterval = 0
+    private nonisolated(unsafe) var lastAppliedBitRate: Int32 = 0
+    private nonisolated(unsafe) var lastRawWindowSize: CGSize = .zero
+
+    private var frameTimer: Timer?
+    private let encodeSemaphore = DispatchSemaphore(value: 2)
+
+    private let targetFrameRate: Int = 20
+    private var minFrameInterval: CFTimeInterval { 1.0 / Double(targetFrameRate) }
+    private let averageBitRate: Int = 2_500_000
+    private let maxCaptureWidth: Int = 1280
 
     private override init() {
         super.init()
@@ -54,15 +75,6 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         case .appMirroringInputText(let text):
             AppMirroringInputInjector.shared.injectText(text)
 
-        case .appMirroringRemoteAnswer(let sdp):
-            transport?.applyRemoteAnswer(sdp: sdp)
-
-        case .appMirroringRemoteCandidate(let sdp, let sdpMLineIndex, let sdpMid):
-            transport?.addRemoteCandidate(sdp: sdp, sdpMLineIndex: sdpMLineIndex, sdpMid: sdpMid)
-
-        case .appMirroringRemoteEnd:
-            stopMirroring()
-
         default:
             break
         }
@@ -72,103 +84,232 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         lock.lock(); defer { lock.unlock() }; return body()
     }
 
+    private static var hasPromptedAccessibility = false
+
+    private static func ensureAccessibilityPermission() {
+        let trusted = AXIsProcessTrusted()
+        print("[Flow][RemoteHost] Accessibility permission check: trusted=\(trusted)")
+        guard !trusted, !hasPromptedAccessibility else { return }
+        hasPromptedAccessibility = true
+        let options: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+        let promptedTrusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
+        print("[Flow][RemoteHost] Accessibility permission prompt shown, trusted=\(promptedTrusted). If this stays false, grant access in System Settings > Privacy & Security > Accessibility for this app, then quit and relaunch it.")
+    }
+
     private func startMirroring(bundleID: String, reply: @escaping (FlowMessage) -> Void) {
+        Self.ensureAccessibilityPermission()
         let sessionID = UUID()
-        let previousStream = lockedValue { () -> SCStream? in
-            let existing = stream
+        let (previousStream, previousSession) = lockedValue { () -> (SCStream?, VTCompressionSession?) in
+            let s = stream
+            let c = compressionSession
             stream = nil
+            compressionSession = nil
             isRunning = false
+            replyBlock = nil
+            lastEncodedAt = 0
             currentSessionID = sessionID
             currentWindowID = 0
             targetWindowFrame = .zero
-            return existing
+            lastRawWindowSize = .zero
+            return (s, c)
+        }
+        if let previousSession {
+            VTCompressionSessionInvalidate(previousSession)
         }
         frameTimer?.invalidate()
         frameTimer = nil
+        RemoteFrameTransport.shared.beginNewSession()
 
-        transport?.close()
-        let newTransport = WebRTCVideoTransport(role: .offerer)
-        transport = newTransport
-        wireTransport(newTransport, reply: reply)
+        print("[Flow][RemoteHost] startMirroring: bundleID=\(bundleID) sessionID=\(sessionID)")
 
         Task {
-            if let previousStream { try? await previousStream.stopCapture() }
-
-            let alreadyRunning = NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == bundleID }
-            if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
-                app.activate(options: [])
-            } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-            }
-            if !alreadyRunning {
-                try? await Task.sleep(nanoseconds: 4_500_000_000)
+            if let previousStream {
+                try? await previousStream.stopCapture()
+                try? await Task.sleep(nanoseconds: 350_000_000)
             }
 
-            guard lockedValue({ currentSessionID == sessionID }) else { return }
+            let launched = await Self.ensureAppRunning(bundleID: bundleID)
 
-            guard let window = try? await findBestWindow(bundleID: bundleID) else {
-                reply(.appMirroringError(error: "Could not find a window for this app."))
+            guard lockedValue({ currentSessionID == sessionID }) else {
+                print("[Flow][RemoteHost] session superseded before window lookup")
                 return
             }
 
-            guard lockedValue({ currentSessionID == sessionID }) else { return }
+            guard launched else {
+                print("[Flow][RemoteHost] ensureAppRunning FAILED for bundleID=\(bundleID)")
+                reply(.appMirroringError(error: "Couldn't open this app. Make sure it's installed on your Mac and try again."))
+                return
+            }
+
+            print("[Flow][RemoteHost] looking up window for bundleID=\(bundleID)")
+            var window = await Self.quickWindowLookup(bundleID: bundleID)
+
+            if window == nil {
+                print("[Flow][RemoteHost] no window found yet, reopening bundleID=\(bundleID)")
+                guard lockedValue({ currentSessionID == sessionID }) else {
+                    print("[Flow][RemoteHost] session superseded before reopen attempt")
+                    return
+                }
+                _ = await Self.reopenApplication(bundleID: bundleID)
+                window = try? await findBestWindow(bundleID: bundleID)
+            }
+
+            guard let foundWindow = window else {
+                print("[Flow][RemoteHost] findBestWindow found nothing for bundleID=\(bundleID)")
+                reply(.appMirroringError(error: "Could not find a window for this app."))
+                return
+            }
+            var resolvedWindow = foundWindow
+            print("[Flow][RemoteHost] found window id=\(resolvedWindow.windowID) frame=\(resolvedWindow.frame)")
+
+            guard lockedValue({ currentSessionID == sessionID }) else {
+                print("[Flow][RemoteHost] session superseded after window lookup")
+                return
+            }
+
+            resolvedWindow = await Self.waitForStableFrame(bundleID: bundleID, initial: resolvedWindow)
+            print("[Flow][RemoteHost] stabilized window frame=\(resolvedWindow.frame)")
+
+            guard lockedValue({ currentSessionID == sessionID }) else {
+                print("[Flow][RemoteHost] session superseded after stabilizing frame")
+                return
+            }
+
+            if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+                app.activate(options: [.activateAllWindows])
+            }
+
+            let inputFrame = Self.refinedInputFrame(for: resolvedWindow)
+            print("[Flow][RemoteHost] input frame resolved=\(inputFrame) rawFrame=\(resolvedWindow.frame)")
 
             lockedValue {
-                targetWindowFrame = window.frame
-                currentWindowID = window.windowID
+                targetWindowFrame = inputFrame
+                currentWindowID = resolvedWindow.windowID
+                lastRawWindowSize = resolvedWindow.frame.size
+                replyBlock = reply
             }
 
-            await buildStream(window: window, bundleID: bundleID, sessionID: sessionID, reply: reply)
             startWindowTracking(bundleID: bundleID, sessionID: sessionID)
+            await buildStream(window: resolvedWindow, captureFrame: inputFrame, bundleID: bundleID, sessionID: sessionID, reply: reply)
+        }
+    }
 
-            newTransport.createOffer { result in
-                switch result {
-                case .success(let sdp):
-                    reply(.appMirroringRemoteOffer(sdp: sdp))
-                case .failure:
-                    reply(.appMirroringError(error: "Could not start the remote video session."))
-                }
+    private static func reopenApplication(bundleID: String) async -> Bool {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return false }
+        do {
+            try await NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        } catch {
+            print("[Flow][RemoteHost] reopenApplication: openApplication FAILED error=\(error)")
+        }
+        if let app = await waitForRunningApplication(bundleID: bundleID, timeout: 6.0) {
+            app.activate(options: [.activateAllWindows])
+            Task.detached(priority: .utility) { await deminiaturizeWindows(for: app) }
+            return true
+        }
+        return false
+    }
+
+    private static func ensureAppRunning(bundleID: String) async -> Bool {
+        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+            print("[Flow][RemoteHost] ensureAppRunning: already running bundleID=\(bundleID) isHidden=\(app.isHidden)")
+            if app.isHidden {
+                app.unhide()
             }
+            app.activate(options: [.activateAllWindows])
+            Task.detached(priority: .utility) { await deminiaturizeWindows(for: app) }
+            return true
         }
+
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            print("[Flow][RemoteHost] ensureAppRunning: no application URL found for bundleID=\(bundleID)")
+            return false
+        }
+
+        for attempt in 1...2 {
+            print("[Flow][RemoteHost] ensureAppRunning: launching bundleID=\(bundleID) attempt=\(attempt) url=\(url)")
+            do {
+                try await NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+            } catch {
+                print("[Flow][RemoteHost] ensureAppRunning: openApplication FAILED attempt=\(attempt) error=\(error)")
+            }
+
+            if let app = await waitForRunningApplication(bundleID: bundleID, timeout: 10.0) {
+                print("[Flow][RemoteHost] ensureAppRunning: confirmed running bundleID=\(bundleID) attempt=\(attempt)")
+                app.activate(options: [.activateAllWindows])
+                Task.detached(priority: .utility) { await deminiaturizeWindows(for: app) }
+                return true
+            }
+            print("[Flow][RemoteHost] ensureAppRunning: not running yet after attempt=\(attempt), will retry")
+        }
+        return false
     }
 
-    private func wireTransport(_ transport: WebRTCVideoTransport, reply: @escaping (FlowMessage) -> Void) {
-        transport.onLocalCandidate = { candidate in
-            reply(.appMirroringRemoteCandidate(
-                sdp: candidate.sdp,
-                sdpMLineIndex: candidate.sdpMLineIndex,
-                sdpMid: candidate.sdpMid ?? ""
-            ))
+    private static func waitForRunningApplication(bundleID: String, timeout: Double) async -> NSRunningApplication? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+                return app
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
-        transport.onConnectionStateChange = { [weak self] state in
-            guard state == .connected else { return }
-            self?.lockedValue { self?.isRunning = true }
-            reply(.appMirroringStarted)
-        }
+        return NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID })
     }
 
-    private func buildStream(window: SCWindow, bundleID: String, sessionID: UUID, reply: @escaping (FlowMessage) -> Void) async {
-        let frame = window.frame
+    private static func waitForStableFrame(bundleID: String, initial: SCWindow) async -> SCWindow {
+        var current = initial
+        for _ in 0..<6 {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+                  let latest = Self.selectBestWindow(from: content.windows, bundleID: bundleID, requireOnScreen: false) else { break }
+            if latest.frame == current.frame {
+                return latest
+            }
+            current = latest
+        }
+        return current
+    }
+
+    private static func displayContaining(_ rect: CGRect, in displays: [SCDisplay]) -> SCDisplay? {
+        displays.max(by: {
+            $0.frame.intersection(rect).width * $0.frame.intersection(rect).height <
+            $1.frame.intersection(rect).width * $1.frame.intersection(rect).height
+        })
+    }
+
+    private func buildStream(window: SCWindow, captureFrame: CGRect, bundleID: String, sessionID: UUID, reply: @escaping (FlowMessage) -> Void) async {
+        let frame = captureFrame
         let rawW = max(Int(frame.width), 2)
         let rawH = max(Int(frame.height), 2)
         let aspect = Double(rawW) / Double(rawH)
-        var capW = min(rawW, 1920)
+        var capW = min(rawW, maxCaptureWidth)
         var capH = max(2, Int(Double(capW) / aspect))
         capW = (capW / 2) * 2
         capH = (capH / 2) * 2
 
+        print("[Flow][RemoteHost] buildStream: windowFrame=\(frame) capW=\(capW) capH=\(capH)")
+
+        guard let newSession = Self.makeCompressionSession(width: Int32(capW), height: Int32(capH), frameRate: targetFrameRate, bitRate: averageBitRate) else {
+            print("[Flow][RemoteHost] buildStream: makeCompressionSession FAILED")
+            reply(.appMirroringError(error: "Could not create the video encoder."))
+            return
+        }
+
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
               let display = Self.displayContaining(frame, in: content.displays) else {
+            print("[Flow][RemoteHost] buildStream: could not locate display for this window")
+            VTCompressionSessionInvalidate(newSession)
             reply(.appMirroringError(error: "Could not locate the display for this window."))
             return
         }
 
-        let sourceRect = CGRect(
+        let rawSourceRect = CGRect(
             x: frame.origin.x - display.frame.origin.x,
             y: frame.origin.y - display.frame.origin.y,
             width: frame.width,
             height: frame.height
         )
+        let displayBounds = CGRect(origin: .zero, size: display.frame.size)
+        let sourceRect = rawSourceRect.intersection(displayBounds)
 
         do {
             let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
@@ -176,7 +317,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
             config.width = capW
             config.height = capH
             config.sourceRect = sourceRect
-            config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+            config.minimumFrameInterval = CMTime(value: 1, timescale: Int32(targetFrameRate))
             config.queueDepth = 3
             config.scalesToFit = true
             config.showsCursor = false
@@ -188,64 +329,287 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
             )
             let newStream = SCStream(filter: filter, configuration: config, delegate: self)
             try newStream.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
+            print("[Flow][RemoteHost] buildStream: starting capture")
             try await newStream.startCapture()
+            print("[Flow][RemoteHost] buildStream: capture started")
 
             guard lockedValue({ currentSessionID == sessionID }) else {
+                print("[Flow][RemoteHost] buildStream: session superseded after startCapture, stopping")
                 try? await newStream.stopCapture()
+                VTCompressionSessionInvalidate(newSession)
                 return
             }
 
-            lockedValue {
+            let oldSession = lockedValue { () -> VTCompressionSession? in
+                let old = compressionSession
                 stream = newStream
+                compressionSession = newSession
                 isRunning = true
+                lastEncodedAt = 0
+                currentCapW = capW
+                currentCapH = capH
+                lastAppliedBitRate = 0
+                return old
+            }
+            if let oldSession {
+                VTCompressionSessionInvalidate(oldSession)
             }
 
-            reply(.appMirroringConfig(width: capW, height: capH, frameRate: 30, port: 0, host: ""))
+            reply(.appMirroringConfig(width: capW, height: capH, frameRate: targetFrameRate, port: 0, host: ""))
+            reply(.appMirroringStarted)
             AppMirroringInputInjector.shared.hideCursor()
         } catch {
+            print("[Flow][RemoteHost] buildStream FAILED error=\(error)")
+            VTCompressionSessionInvalidate(newSession)
             reply(.appMirroringError(error: error.localizedDescription))
         }
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, sampleBuffer.isValid, let pixelBuffer = sampleBuffer.imageBuffer else { return }
-        guard lockedValue({ isRunning }) else { return }
-        transport?.pushCapturedFrame(pixelBuffer)
+
+        lock.lock()
+        guard isRunning, let session = compressionSession else { lock.unlock(); return }
+        let now = CACurrentMediaTime()
+        let elapsed = now - lastEncodedAt
+        guard elapsed >= minFrameInterval else { lock.unlock(); return }
+        guard replyBlock != nil else { lock.unlock(); return }
+        guard RemoteFrameTransport.shared.reserveSlot() else { lock.unlock(); return }
+        lastEncodedAt = now
+        let bitRate = RemoteFrameTransport.shared.currentBitRate()
+        if bitRate != lastAppliedBitRate {
+            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitRate as CFNumber)
+            lastAppliedBitRate = bitRate
+        }
+        lock.unlock()
+
+        guard encodeSemaphore.wait(timeout: .now()) == .success else {
+            RemoteFrameTransport.shared.releaseSlot()
+            return
+        }
+
+        let forceKeyframe = RemoteFrameTransport.shared.consumeForceKeyframe()
+        let frameProperties: CFDictionary? = forceKeyframe
+            ? [kVTEncodeFrameOptionKey_ForceKeyFrame as String: true] as CFDictionary
+            : nil
+
+        let pts = CMTime(seconds: now, preferredTimescale: 1_000_000)
+        let status = VTCompressionSessionEncodeFrame(
+            session,
+            imageBuffer: pixelBuffer,
+            presentationTimeStamp: pts,
+            duration: .invalid,
+            frameProperties: frameProperties,
+            infoFlagsOut: nil
+        ) { [weak self] encodeStatus, _, encodedSampleBuffer in
+            defer { self?.encodeSemaphore.signal() }
+            guard encodeStatus == noErr,
+                  let encodedSampleBuffer,
+                  CMSampleBufferDataIsReady(encodedSampleBuffer),
+                  let annexB = Self.annexBData(from: encodedSampleBuffer) else {
+                RemoteFrameTransport.shared.releaseSlot()
+                return
+            }
+            RemoteFrameTransport.shared.sendReservedFrame(.appMirroringFrame(data: annexB, timestamp: now))
+        }
+        if status != noErr {
+            encodeSemaphore.signal()
+            RemoteFrameTransport.shared.releaseSlot()
+        }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
+        print("[Flow][RemoteHost] stream didStopWithError error=\(error)")
         lockedValue { isRunning = false }
         AppMirroringInputInjector.shared.showCursor()
+    }
+
+    private static func deminiaturizeWindows(for app: NSRunningApplication) {
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement] else {
+            print("[Flow][RemoteHost] deminiaturizeWindows: could not read AX windows for bundleID=\(app.bundleIdentifier ?? "?")")
+            return
+        }
+        for window in windows {
+            var minimizedValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success,
+                  let isMinimized = minimizedValue as? Bool, isMinimized else { continue }
+            print("[Flow][RemoteHost] deminiaturizeWindows: restoring a minimized window for bundleID=\(app.bundleIdentifier ?? "?")")
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
+    }
+
+    private static func quickWindowLookup(bundleID: String) async -> SCWindow? {
+        for attempt in 0..<4 {
+            if let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+               let best = selectBestWindow(from: content.windows, bundleID: bundleID, requireOnScreen: true) {
+                return best
+            }
+            if attempt < 3 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+        return nil
+    }
+
+    private static func refinedInputFrame(for window: SCWindow) -> CGRect {
+        let fallback = window.frame
+        guard let pid = window.owningApplication?.processID else { return fallback }
+        let axApp = AXUIElementCreateApplication(pid)
+        var windowsRef: CFTypeRef?
+        let axResult = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef)
+        guard axResult == .success, let axWindows = windowsRef as? [AXUIElement], !axWindows.isEmpty else {
+            print("[Flow][RemoteHost] refinedInputFrame: AX windows lookup FAILED result=\(axResult.rawValue) trusted=\(AXIsProcessTrusted()) pid=\(pid), falling back to rawFrame=\(fallback)")
+            return fallback
+        }
+
+        var bestFrame: CGRect?
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+
+        for axWindow in axWindows {
+            var positionRef: CFTypeRef?
+            var sizeRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &positionRef) == .success,
+                  AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef) == .success,
+                  let positionValue = positionRef, CFGetTypeID(positionValue) == AXValueGetTypeID(),
+                  let sizeValue = sizeRef, CFGetTypeID(sizeValue) == AXValueGetTypeID() else { continue }
+
+            var position = CGPoint.zero
+            var size = CGSize.zero
+            guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
+                  AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { continue }
+
+            let candidate = CGRect(origin: position, size: size)
+
+            let identityDistance = abs(candidate.origin.x - fallback.origin.x)
+                + abs(candidate.width - fallback.width)
+            guard identityDistance <= 40 else { continue }
+
+            let distance = identityDistance
+                + abs(candidate.origin.y - fallback.origin.y)
+                + abs(candidate.height - fallback.height)
+
+            if distance < bestDistance {
+                bestDistance = distance
+                bestFrame = candidate
+            }
+        }
+
+        let resolved = bestFrame ?? fallback
+        print("[Flow][RemoteHost] refinedInputFrame: rawFrame=\(fallback) resolved=\(resolved) matchedAX=\(bestFrame != nil)")
+        return resolved
     }
 
     private func findBestWindow(bundleID: String) async throws -> SCWindow? {
         for attempt in 0..<20 {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            if let best = Self.selectBestWindow(from: content.windows, bundleID: bundleID) {
+            if let best = Self.selectBestWindow(from: content.windows, bundleID: bundleID, requireOnScreen: true) {
                 return best
             }
             if attempt < 19 { try await Task.sleep(nanoseconds: 750_000_000) }
         }
+        print("[Flow][RemoteHost] findBestWindow: no on-screen window found for bundleID=\(bundleID), falling back to any window")
+        if let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+           let fallback = Self.selectBestWindow(from: content.windows, bundleID: bundleID, requireOnScreen: false) {
+            return fallback
+        }
         return nil
     }
 
-    private static func displayContaining(_ rect: CGRect, in displays: [SCDisplay]) -> SCDisplay? {
-        displays.max(by: {
-            $0.frame.intersection(rect).width * $0.frame.intersection(rect).height <
-            $1.frame.intersection(rect).width * $1.frame.intersection(rect).height
-        })
-    }
-
-    private static func selectBestWindow(from windows: [SCWindow], bundleID: String) -> SCWindow? {
+    private static func selectBestWindow(from windows: [SCWindow], bundleID: String, requireOnScreen: Bool = true) -> SCWindow? {
         let candidates = windows.filter {
             $0.owningApplication?.bundleIdentifier == bundleID
-                && $0.isOnScreen
+                && (!requireOnScreen || $0.isOnScreen)
                 && $0.frame.width >= 100
                 && $0.frame.height >= 100
         }
         let titled = candidates.filter { !($0.title?.isEmpty ?? true) }
         let pool = titled.isEmpty ? candidates : titled
         return pool.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
+    }
+
+    private static func makeCompressionSession(width: Int32, height: Int32, frameRate: Int, bitRate: Int) -> VTCompressionSession? {
+        let imageBufferAttributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+
+        var session: VTCompressionSession?
+        let status = VTCompressionSessionCreate(
+            allocator: kCFAllocatorDefault,
+            width: width,
+            height: height,
+            codecType: kCMVideoCodecType_H264,
+            encoderSpecification: nil,
+            imageBufferAttributes: imageBufferAttributes as CFDictionary,
+            compressedDataAllocator: nil,
+            outputCallback: nil,
+            refcon: nil,
+            compressionSessionOut: &session
+        )
+        guard status == noErr, let session else { return nil }
+
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_Baseline_AutoLevel)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: Int32(frameRate * 2) as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 2.0 as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: Int32(bitRate) as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: Int32(frameRate) as CFNumber)
+        VTCompressionSessionPrepareToEncodeFrames(session)
+        return session
+    }
+
+    private static func isKeyframe(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        guard let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
+              let attachments = attachmentsArray.first else { return true }
+        return (attachments[kCMSampleAttachmentKey_NotSync] as? Bool) != true
+    }
+
+    private static func annexBData(from sampleBuffer: CMSampleBuffer) -> Data? {
+        guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return nil }
+        var totalLength = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
+        guard CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &totalLength, dataPointerOut: &dataPointer) == noErr,
+              let dataPointer else { return nil }
+
+        var result = Data()
+        let startCode: [UInt8] = [0, 0, 0, 1]
+
+        if isKeyframe(sampleBuffer), let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) {
+            var parameterSetCount = 0
+            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                formatDescription, parameterSetIndex: 0,
+                parameterSetPointerOut: nil, parameterSetSizeOut: nil,
+                parameterSetCountOut: &parameterSetCount, nalUnitHeaderLengthOut: nil
+            )
+            for i in 0..<parameterSetCount {
+                var parameterSetPointer: UnsafePointer<UInt8>?
+                var parameterSetSize = 0
+                guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    formatDescription, parameterSetIndex: i,
+                    parameterSetPointerOut: &parameterSetPointer, parameterSetSizeOut: &parameterSetSize,
+                    parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil
+                ) == noErr, let parameterSetPointer else { continue }
+                result.append(contentsOf: startCode)
+                result.append(UnsafeBufferPointer(start: parameterSetPointer, count: parameterSetSize))
+            }
+        }
+
+        let raw = UnsafeRawBufferPointer(start: dataPointer, count: totalLength)
+        var offset = 0
+        while offset + 4 <= totalLength {
+            let nalLength = Int(UInt32(raw[offset]) << 24 | UInt32(raw[offset + 1]) << 16 | UInt32(raw[offset + 2]) << 8 | UInt32(raw[offset + 3]))
+            let nalStart = offset + 4
+            let nalEnd = nalStart + nalLength
+            guard nalLength > 0, nalEnd <= totalLength else { break }
+            result.append(contentsOf: startCode)
+            result.append(contentsOf: raw[nalStart..<nalEnd])
+            offset = nalEnd
+        }
+
+        return result
     }
 
     private func startWindowTracking(bundleID: String, sessionID: UUID) {
@@ -256,31 +620,133 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
                 guard self.lockedValue({ self.isRunning && self.currentSessionID == sessionID }) else { return }
                 Task {
                     guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) else { return }
-                    guard let best = Self.selectBestWindow(from: content.windows, bundleID: bundleID) else { return }
-                    self.lockedValue {
-                        self.targetWindowFrame = best.frame
-                        self.currentWindowID = best.windowID
+                    guard var best = await Self.selectBestWindow(from: content.windows, bundleID: bundleID) else { return }
+                    guard await self.lockedValue({ self.isRunning && self.currentSessionID == sessionID }) else { return }
+
+                    let previousSize = await self.lockedValue { self.lastRawWindowSize }
+                    let widthDelta = abs(previousSize.width - best.frame.width)
+                    let heightDelta = abs(previousSize.height - best.frame.height)
+                    let isResizing = previousSize.width > 0 && previousSize.height > 0 && (widthDelta > 8 || heightDelta > 8)
+
+                    let previousOrigin = await self.lockedValue { self.targetWindowFrame.origin }
+                    let originDelta = max(abs(previousOrigin.x - best.frame.origin.x), abs(previousOrigin.y - best.frame.origin.y))
+                    let hasMoved = originDelta > 2
+
+                    if isResizing {
+                        best = await Self.waitForStableFrame(bundleID: bundleID, initial: best)
+                        guard await self.lockedValue({ self.isRunning && self.currentSessionID == sessionID }) else { return }
                     }
+
+                    let refined = await Self.refinedInputFrame(for: best)
+                    await self.lockedValue {
+                        self.targetWindowFrame = refined
+                        self.currentWindowID = best.windowID
+                        self.lastRawWindowSize = best.frame.size
+                    }
+
+                    guard isResizing || hasMoved else { return }
+                    await self.reconfigureStream(for: refined, bundleID: bundleID, sessionID: sessionID)
                 }
             }
         }
     }
 
+    private func reconfigureStream(for windowFrame: CGRect, bundleID: String, sessionID: UUID) async {
+        guard lockedValue({ currentSessionID == sessionID && isRunning }), let activeStream = lockedValue({ stream }) else { return }
+
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              let display = Self.displayContaining(windowFrame, in: content.displays) else {
+            print("[Flow][RemoteHost] reconfigureStream: could not locate display, skipping update")
+            return
+        }
+
+        let rawSourceRect = CGRect(
+            x: windowFrame.origin.x - display.frame.origin.x,
+            y: windowFrame.origin.y - display.frame.origin.y,
+            width: windowFrame.width,
+            height: windowFrame.height
+        )
+        let displayBounds = CGRect(origin: .zero, size: display.frame.size)
+        let sourceRect = rawSourceRect.intersection(displayBounds)
+
+        let rawW = max(Int(windowFrame.width), 2)
+        let rawH = max(Int(windowFrame.height), 2)
+        let aspect = Double(rawW) / Double(rawH)
+        var capW = min(rawW, maxCaptureWidth)
+        var capH = max(2, Int(Double(capW) / aspect))
+        capW = (capW / 2) * 2
+        capH = (capH / 2) * 2
+
+        let dimensionsChanged = capW != currentCapW || capH != currentCapH
+        let (targetCapW, targetCapH) = dimensionsChanged ? (capW, capH) : (currentCapW, currentCapH)
+
+        print("[Flow][RemoteHost] reconfigureStream: updating sourceRect=\(sourceRect) dimensionsChanged=\(dimensionsChanged) capW=\(targetCapW) capH=\(targetCapH)")
+
+        let newConfig = SCStreamConfiguration()
+        newConfig.width = targetCapW
+        newConfig.height = targetCapH
+        newConfig.sourceRect = sourceRect
+        newConfig.minimumFrameInterval = CMTime(value: 1, timescale: Int32(targetFrameRate))
+        newConfig.queueDepth = 3
+        newConfig.scalesToFit = true
+        newConfig.showsCursor = false
+        newConfig.pixelFormat = kCVPixelFormatType_32BGRA
+
+        do {
+            try await activeStream.updateConfiguration(newConfig)
+        } catch {
+            print("[Flow][RemoteHost] reconfigureStream: updateConfiguration FAILED error=\(error)")
+            return
+        }
+
+        guard dimensionsChanged else { return }
+        guard lockedValue({ currentSessionID == sessionID && isRunning }) else { return }
+
+        let bitRate = Int(RemoteFrameTransport.shared.currentBitRate())
+        guard let newSession = Self.makeCompressionSession(width: Int32(capW), height: Int32(capH), frameRate: targetFrameRate, bitRate: bitRate) else {
+            print("[Flow][RemoteHost] reconfigureStream: makeCompressionSession FAILED")
+            return
+        }
+
+        let oldSession = lockedValue { () -> VTCompressionSession? in
+            guard currentSessionID == sessionID else { return nil }
+            let old = compressionSession
+            compressionSession = newSession
+            currentCapW = capW
+            currentCapH = capH
+            lastAppliedBitRate = 0
+            return old
+        }
+        if let oldSession {
+            VTCompressionSessionInvalidate(oldSession)
+        }
+
+        let currentReply = lockedValue { replyBlock }
+        currentReply?(.appMirroringConfig(width: capW, height: capH, frameRate: targetFrameRate, port: 0, host: ""))
+    }
+
     private func stopMirroring() {
-        let existingStream = lockedValue { () -> SCStream? in
-            let existing = stream
+        let (existingStream, existingSession) = lockedValue { () -> (SCStream?, VTCompressionSession?) in
+            let s = stream
+            let c = compressionSession
             stream = nil
+            compressionSession = nil
             isRunning = false
             targetWindowFrame = .zero
             currentWindowID = 0
             currentSessionID = UUID()
-            return existing
+            replyBlock = nil
+            lastEncodedAt = 0
+            lastRawWindowSize = .zero
+            return (s, c)
         }
         frameTimer?.invalidate()
         frameTimer = nil
         AppMirroringInputInjector.shared.showCursor()
-        transport?.close()
-        transport = nil
+        if let existingSession {
+            VTCompressionSessionInvalidate(existingSession)
+        }
+        print("[Flow][RemoteHost] stopMirroring")
         Task { try? await existingStream?.stopCapture() }
     }
 }

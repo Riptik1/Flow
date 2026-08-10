@@ -36,9 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         try? SMAppService.mainApp.register()
-        if FlowShouldAutoSearch {
-            ConnectionManager.shared.startAutoConnect()
-        }
+        FlowConnectionRepository.shared.startAutoConnect()
         if !isAutoLaunch() {
             showMainWindow()
         }

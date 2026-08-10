@@ -1,3 +1,10 @@
+//
+//  RemoteFrameTransport.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 24/07/26.
+//
+
 import Foundation
 
 final class RemoteFrameTransport {
@@ -11,7 +18,12 @@ final class RemoteFrameTransport {
     private var sendDurationsMs: [Double] = []
     private let maxBitRate: Int32 = 2_500_000
     private let minBitRate: Int32 = 350_000
-    private let sendTimeoutNanos: UInt64 = 5_000_000_000
+    private let sendTimeoutNanos: UInt64 = 6_000_000_000
+
+    private var consecutiveStalls = 0
+    private let maxConsecutiveStalls = 2
+
+    var onChannelStalled: (() -> Void)?
 
     private init() {}
 
@@ -24,6 +36,16 @@ final class RemoteFrameTransport {
         targetBitRate = maxBitRate
         lock.unlock()
         print("[Flow][FrameTransport] attach: channel=\(channel == nil ? "nil" : "set") targetBitRate=\(maxBitRate)")
+    }
+
+    func beginNewSession() {
+        lock.lock()
+        slotBusy = false
+        needsKeyframe = true
+        sendDurationsMs.removeAll()
+        consecutiveStalls = 0
+        lock.unlock()
+        print("[Flow][FrameTransport] beginNewSession: cleared any stale in-flight slot, forcing fresh keyframe")
     }
 
     func reserveSlot() -> Bool {
@@ -67,25 +89,58 @@ final class RemoteFrameTransport {
         let startedAt = DispatchTime.now()
         let timeout = sendTimeoutNanos
         Task { [weak self] in
-            let ok = await withTaskGroup(of: Bool.self) { group -> Bool in
-                group.addTask { await activeChannel.send(message) }
+            let outcome = await withTaskGroup(of: Bool?.self) { group -> Bool? in
+                group.addTask { Optional(await activeChannel.send(message)) }
                 group.addTask {
                     try? await Task.sleep(nanoseconds: timeout)
-                    return false
+                    return Bool?.none
                 }
-                let first = await group.next() ?? false
+                let first = await group.next() ?? nil
                 group.cancelAll()
                 return first
             }
             let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - startedAt.uptimeNanoseconds) / 1_000_000
-            self?.finishSend(success: ok, elapsedMs: elapsedMs)
+            guard let self else { return }
+            if let ok = outcome {
+                self.finishSend(success: ok, elapsedMs: elapsedMs)
+            } else {
+                self.handleStalledSend(staleChannel: activeChannel, elapsedMs: elapsedMs)
+            }
         }
+    }
+
+    private func handleStalledSend(staleChannel: RemoteMessageChannel, elapsedMs: Double) {
+        lock.lock()
+        let stillCurrent = channel === staleChannel
+        guard stillCurrent else {
+            lock.unlock()
+            return
+        }
+
+        slotBusy = false
+        needsKeyframe = true
+        sendDurationsMs.removeAll()
+        consecutiveStalls += 1
+        let stalls = consecutiveStalls
+
+        guard stalls >= maxConsecutiveStalls else {
+            lock.unlock()
+            print("[Flow][FrameTransport] sendReservedFrame: stall #\(stalls) after \(elapsedMs)ms, dropping this frame and requesting a fresh keyframe, not reconnecting yet")
+            return
+        }
+
+        channel = nil
+        consecutiveStalls = 0
+        lock.unlock()
+        print("[Flow][FrameTransport] sendReservedFrame: \(stalls) consecutive stalls, retiring this channel and requesting a reconnect")
+        onChannelStalled?()
     }
 
     private func finishSend(success: Bool, elapsedMs: Double) {
         lock.lock()
         defer { lock.unlock() }
         slotBusy = false
+        consecutiveStalls = 0
 
         guard success else {
             needsKeyframe = true

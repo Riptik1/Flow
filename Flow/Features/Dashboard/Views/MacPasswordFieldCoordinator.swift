@@ -1,4 +1,12 @@
+//
+//  MacPasswordFieldCoordinator.swift
+//  Flow
+//
+//  Created by Riptik Jhajhria on 06/07/26.
+//
+
 import UIKit
+import SwiftUI
 
 final class MacPasswordFieldCoordinator: NSObject, UITextFieldDelegate {
     var onCharacterAdded: (Character) -> Void = { _ in }

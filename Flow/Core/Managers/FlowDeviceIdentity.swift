@@ -1,18 +1,3 @@
-//
-//  FlowDeviceIdentity.swift
-//  Flow
-//
-//  Created by Riptik Jhajhria on 14/07/26.
-//
-
-
-//
-//  FlowDeviceIdentity.swift
-//  Flow
-//
-//  Created by Riptik Jhajhria on 13/07/26.
-//
-
 import Foundation
 
 @MainActor

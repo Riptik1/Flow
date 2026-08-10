@@ -5,21 +5,19 @@
 //  Created by Riptik Jhajhria on 06/07/26.
 //
 
-
 import Combine
 import SwiftUI
 
 final class DashboardViewModel: ObservableObject {
     @Published var isMuted = false
     @Published var isMacLocked = false
-    @Published var pairingCodeInput = ""
     @Published private(set) var toast: ToastPresentation? = nil
 
-    private let connectionService: RemoteConnectionServicing
+    private let connectionService: FlowConnectionServicing
     private var cancellables = Set<AnyCancellable>()
     private var toastDismissTask: Task<Void, Never>?
 
-    init(connectionService: RemoteConnectionServicing = LiveRemoteConnectionService.shared) {
+    init(connectionService: FlowConnectionServicing = FlowConnectionRepository.shared) {
         self.connectionService = connectionService
         connectionService.messageStream
             .receive(on: DispatchQueue.main)
@@ -28,11 +26,13 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func start() {
+        print("DashboardViewModel[lifecycle]: start()")
         connectionService.startAutoConnect()
         BackTapCoordinator.shared.startIfNeeded()
     }
 
     func handleForeground() {
+        print("DashboardViewModel[lifecycle]: handleForeground()")
         connectionService.handleAppForeground()
         BackTapCoordinator.shared.startIfNeeded()
     }
@@ -47,16 +47,6 @@ final class DashboardViewModel: ObservableObject {
 
     func shutDownMac() {
         connectionService.send(.systemShutDown)
-    }
-
-    func resetPairingCodeIfNeeded(forState isConnected: Bool) {
-        guard isConnected else { return }
-        pairingCodeInput = ""
-    }
-
-    func submitPairingCode() {
-        guard pairingCodeInput.count == 6 else { return }
-        connectionService.redeem(code: pairingCodeInput)
     }
 
     func fireToast(_ toast: ToastPresentation) {
@@ -78,5 +68,15 @@ final class DashboardViewModel: ObservableObject {
         default:
             break
         }
+    }
+}
+
+struct ToastPresentation: Equatable {
+    let message: String
+    let icon: String
+    let color: Color
+
+    static func == (lhs: ToastPresentation, rhs: ToastPresentation) -> Bool {
+        lhs.message == rhs.message && lhs.icon == rhs.icon
     }
 }

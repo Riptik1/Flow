@@ -56,7 +56,7 @@ struct WorkflowsView: View {
                     showPicker = false
                 }
             )
-        }˘
+        }
         .alert("Delete Workflow", isPresented: $showDeleteAlert, presenting: workflowToDelete) { wf in
             Button("Delete", role: .destructive) {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { vm.delete(wf) }
@@ -200,7 +200,6 @@ struct WorkflowCard: View {
                 .contentShape(Rectangle())
                 .contextMenu {
                     Button { onEdit()    } label: { Label("Edit Workflow",     systemImage: "pencil") }
-                    Button { onBackTap() } label: { Label("Back Tap Shortcut", systemImage: "hand.tap.fill") }
                     Divider()
                     Button(role: .destructive) { onDelete() } label: { Label("Delete", systemImage: "trash") }
                 }

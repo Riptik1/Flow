@@ -6,14 +6,63 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		7E6326DA300B188700F7E78E /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 7E6326D9300B188700F7E78E /* WebRTC */; };
+		7E6326DC300B18A400F7E78E /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 7E6326DB300B18A400F7E78E /* WebRTC */; };
+		7EC641F82FF760AC00CBA502 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = 7EC641F72FF760AC00CBA502 /* Functions */; };
+		7EC641FA2FF760AC00CBA502 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 7EC641F92FF760AC00CBA502 /* PostgREST */; };
+		7EC641FC2FF760AC00CBA502 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 7EC641FB2FF760AC00CBA502 /* Realtime */; };
+		7EC641FE2FF760AC00CBA502 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 7EC641FD2FF760AC00CBA502 /* Storage */; };
+		7EC642002FF760AC00CBA502 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 7EC641FF2FF760AC00CBA502 /* Supabase */; };
+		7EC642022FF7637000CBA502 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 7EC642012FF7637000CBA502 /* Supabase */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		7E2A40D62FB0118D00F07BE6 /* Flow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Flow.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7EF996BB2FC29FA800588F31 /* Flow Mac-Mirrioring.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Flow Mac-Mirrioring.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		7EF996CB2FC2B32300588F31 /* Exceptions for "Flow" folder in "Flow" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 7E2A40D52FB0118D00F07BE6 /* Flow */;
+		};
+		7EF996D12FC2B55600588F31 /* Exceptions for "Flow" folder in "Flow Mac-Mirrioring" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Core/Data/Repositories/FlowConnectionRepository.swift,
+				Core/Dependency/FlowBackendClient.swift,
+				Core/Dependency/FlowConnectionServicing.swift,
+				Core/Managers/FlowConnectionState.swift,
+				Core/Managers/FlowDeviceIdentity.swift,
+				Core/Managers/FlowRealtimeEvent.swift,
+				Core/Managers/RemoteConnectionManager.swift,
+				Core/Managers/RemoteFrameTransport.swift,
+				Core/Managers/SupabaseConfig.swift,
+				Core/Managers/SupabaseManager.swift,
+				Features/Dashboard/ViewModel/RemotePairingViewModel.swift,
+				"Features/File/Models /FlowMessage.swift",
+			);
+			target = 7EF996BA2FC29FA800588F31 /* Flow Mac-Mirrioring */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		7E2A40D82FB0118D00F07BE6 /* Flow */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				7EF996CB2FC2B32300588F31 /* Exceptions for "Flow" folder in "Flow" target */,
+				7EF996D12FC2B55600588F31 /* Exceptions for "Flow" folder in "Flow Mac-Mirrioring" target */,
+			);
 			path = Flow;
+			sourceTree = "<group>";
+		};
+		7EF996BC2FC29FA800588F31 /* Flow Mac-Mirrioring */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Flow Mac-Mirrioring";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -23,6 +72,21 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7EC642002FF760AC00CBA502 /* Supabase in Frameworks */,
+				7E6326DA300B188700F7E78E /* WebRTC in Frameworks */,
+				7EC641FE2FF760AC00CBA502 /* Storage in Frameworks */,
+				7EC641FC2FF760AC00CBA502 /* Realtime in Frameworks */,
+				7EC641FA2FF760AC00CBA502 /* PostgREST in Frameworks */,
+				7EC641F82FF760AC00CBA502 /* Functions in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7EF996B82FC29FA800588F31 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7EC642022FF7637000CBA502 /* Supabase in Frameworks */,
+				7E6326DC300B18A400F7E78E /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -33,6 +97,7 @@
 			isa = PBXGroup;
 			children = (
 				7E2A40D82FB0118D00F07BE6 /* Flow */,
+				7EF996BC2FC29FA800588F31 /* Flow Mac-Mirrioring */,
 				7E2A40D72FB0118D00F07BE6 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +106,7 @@
 			isa = PBXGroup;
 			children = (
 				7E2A40D62FB0118D00F07BE6 /* Flow.app */,
+				7EF996BB2FC29FA800588F31 /* Flow Mac-Mirrioring.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -65,9 +131,39 @@
 			);
 			name = Flow;
 			packageProductDependencies = (
+				7EC641F72FF760AC00CBA502 /* Functions */,
+				7EC641F92FF760AC00CBA502 /* PostgREST */,
+				7EC641FB2FF760AC00CBA502 /* Realtime */,
+				7EC641FD2FF760AC00CBA502 /* Storage */,
+				7EC641FF2FF760AC00CBA502 /* Supabase */,
+				7E6326D9300B188700F7E78E /* WebRTC */,
 			);
 			productName = Flow;
 			productReference = 7E2A40D62FB0118D00F07BE6 /* Flow.app */;
+			productType = "com.apple.product-type.application";
+		};
+		7EF996BA2FC29FA800588F31 /* Flow Mac-Mirrioring */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7EF996C52FC29FAA00588F31 /* Build configuration list for PBXNativeTarget "Flow Mac-Mirrioring" */;
+			buildPhases = (
+				7EF996B72FC29FA800588F31 /* Sources */,
+				7EF996B82FC29FA800588F31 /* Frameworks */,
+				7EF996B92FC29FA800588F31 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7EF996BC2FC29FA800588F31 /* Flow Mac-Mirrioring */,
+			);
+			name = "Flow Mac-Mirrioring";
+			packageProductDependencies = (
+				7EC642012FF7637000CBA502 /* Supabase */,
+				7E6326DB300B18A400F7E78E /* WebRTC */,
+			);
+			productName = "Flow Mac-Mirrioring";
+			productReference = 7EF996BB2FC29FA800588F31 /* Flow Mac-Mirrioring.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -83,6 +179,9 @@
 					7E2A40D52FB0118D00F07BE6 = {
 						CreatedOnToolsVersion = 26.1.1;
 					};
+					7EF996BA2FC29FA800588F31 = {
+						CreatedOnToolsVersion = 26.1.1;
+					};
 				};
 			};
 			buildConfigurationList = 7E2A40D12FB0118D00F07BE6 /* Build configuration list for PBXProject "Flow" */;
@@ -94,12 +193,17 @@
 			);
 			mainGroup = 7E2A40CD2FB0118D00F07BE6;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7EC641F62FF760AC00CBA502 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				7E6326D8300B188700F7E78E /* XCRemoteSwiftPackageReference "WebRTC" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 7E2A40D72FB0118D00F07BE6 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				7E2A40D52FB0118D00F07BE6 /* Flow */,
+				7EF996BA2FC29FA800588F31 /* Flow Mac-Mirrioring */,
 			);
 		};
 /* End PBXProject section */
@@ -112,10 +216,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7EF996B92FC29FA800588F31 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		7E2A40D22FB0118D00F07BE6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7EF996B72FC29FA800588F31 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -254,6 +372,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Flow/Info.plist;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Flow uses the local network to connect to your Mac.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -264,10 +384,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 26.1;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.Flow.mac-mirrioring.Flow";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -298,6 +418,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Flow/Info.plist;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Flow uses the local network to connect to your Mac.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -308,10 +430,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 26.1;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.Flow.mac-mirrioring.Flow";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -326,6 +448,74 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
 				XROS_DEPLOYMENT_TARGET = 26.1;
+			};
+			name = Release;
+		};
+		7EF996C32FC29FAA00588F31 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = VK9Z944KWB;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Flow-Mac-Mirrioring-Info.plist";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.1;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.Flow.mac-mirrioring.Flow-Mac-Mirrioring";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		7EF996C42FC29FAA00588F31 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = VK9Z944KWB;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Flow-Mac-Mirrioring-Info.plist";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.1;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.Flow.mac-mirrioring.Flow-Mac-Mirrioring";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
 		};
@@ -350,7 +540,78 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		7EF996C52FC29FAA00588F31 /* Build configuration list for PBXNativeTarget "Flow Mac-Mirrioring" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7EF996C32FC29FAA00588F31 /* Debug */,
+				7EF996C42FC29FAA00588F31 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7E6326D8300B188700F7E78E /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 150.0.0;
+			};
+		};
+		7EC641F62FF760AC00CBA502 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7E6326D9300B188700F7E78E /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7E6326D8300B188700F7E78E /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+		7E6326DB300B18A400F7E78E /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7E6326D8300B188700F7E78E /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+		7EC641F72FF760AC00CBA502 /* Functions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7EC641F62FF760AC00CBA502 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Functions;
+		};
+		7EC641F92FF760AC00CBA502 /* PostgREST */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7EC641F62FF760AC00CBA502 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = PostgREST;
+		};
+		7EC641FB2FF760AC00CBA502 /* Realtime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7EC641F62FF760AC00CBA502 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Realtime;
+		};
+		7EC641FD2FF760AC00CBA502 /* Storage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7EC641F62FF760AC00CBA502 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Storage;
+		};
+		7EC641FF2FF760AC00CBA502 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7EC641F62FF760AC00CBA502 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+		7EC642012FF7637000CBA502 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7EC641F62FF760AC00CBA502 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7E2A40CE2FB0118D00F07BE6 /* Project object */;
 }
