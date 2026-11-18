@@ -88,12 +88,12 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
 
     private static func ensureAccessibilityPermission() {
         let trusted = AXIsProcessTrusted()
-        print("[Flow][RemoteHost] Accessibility permission check: trusted=\(trusted)")
+        flowLog("[Flow][RemoteHost] Accessibility permission check: trusted=\(trusted)")
         guard !trusted, !hasPromptedAccessibility else { return }
         hasPromptedAccessibility = true
         let options: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
         let promptedTrusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
-        print("[Flow][RemoteHost] Accessibility permission prompt shown, trusted=\(promptedTrusted). If this stays false, grant access in System Settings > Privacy & Security > Accessibility for this app, then quit and relaunch it.")
+        flowLog("[Flow][RemoteHost] Accessibility permission prompt shown, trusted=\(promptedTrusted). If this stays false, grant access in System Settings > Privacy & Security > Accessibility for this app, then quit and relaunch it.")
     }
 
     private func startMirroring(bundleID: String, reply: @escaping (FlowMessage) -> Void) {
@@ -120,7 +120,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         frameTimer = nil
         RemoteFrameTransport.shared.beginNewSession()
 
-        print("[Flow][RemoteHost] startMirroring: bundleID=\(bundleID) sessionID=\(sessionID)")
+        flowLog("[Flow][RemoteHost] startMirroring: bundleID=\(bundleID) sessionID=\(sessionID)")
 
         Task {
             if let previousStream {
@@ -131,23 +131,23 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
             let launched = await Self.ensureAppRunning(bundleID: bundleID)
 
             guard lockedValue({ currentSessionID == sessionID }) else {
-                print("[Flow][RemoteHost] session superseded before window lookup")
+                flowLog("[Flow][RemoteHost] session superseded before window lookup")
                 return
             }
 
             guard launched else {
-                print("[Flow][RemoteHost] ensureAppRunning FAILED for bundleID=\(bundleID)")
+                flowLog("[Flow][RemoteHost] ensureAppRunning FAILED for bundleID=\(bundleID)")
                 reply(.appMirroringError(error: "Couldn't open this app. Make sure it's installed on your Mac and try again."))
                 return
             }
 
-            print("[Flow][RemoteHost] looking up window for bundleID=\(bundleID)")
+            flowLog("[Flow][RemoteHost] looking up window for bundleID=\(bundleID)")
             var window = await Self.quickWindowLookup(bundleID: bundleID)
 
             if window == nil {
-                print("[Flow][RemoteHost] no window found yet, reopening bundleID=\(bundleID)")
+                flowLog("[Flow][RemoteHost] no window found yet, reopening bundleID=\(bundleID)")
                 guard lockedValue({ currentSessionID == sessionID }) else {
-                    print("[Flow][RemoteHost] session superseded before reopen attempt")
+                    flowLog("[Flow][RemoteHost] session superseded before reopen attempt")
                     return
                 }
                 _ = await Self.reopenApplication(bundleID: bundleID)
@@ -155,23 +155,23 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
             }
 
             guard let foundWindow = window else {
-                print("[Flow][RemoteHost] findBestWindow found nothing for bundleID=\(bundleID)")
+                flowLog("[Flow][RemoteHost] findBestWindow found nothing for bundleID=\(bundleID)")
                 reply(.appMirroringError(error: "Could not find a window for this app."))
                 return
             }
             var resolvedWindow = foundWindow
-            print("[Flow][RemoteHost] found window id=\(resolvedWindow.windowID) frame=\(resolvedWindow.frame)")
+            flowLog("[Flow][RemoteHost] found window id=\(resolvedWindow.windowID) frame=\(resolvedWindow.frame)")
 
             guard lockedValue({ currentSessionID == sessionID }) else {
-                print("[Flow][RemoteHost] session superseded after window lookup")
+                flowLog("[Flow][RemoteHost] session superseded after window lookup")
                 return
             }
 
             resolvedWindow = await Self.waitForStableFrame(bundleID: bundleID, initial: resolvedWindow)
-            print("[Flow][RemoteHost] stabilized window frame=\(resolvedWindow.frame)")
+            flowLog("[Flow][RemoteHost] stabilized window frame=\(resolvedWindow.frame)")
 
             guard lockedValue({ currentSessionID == sessionID }) else {
-                print("[Flow][RemoteHost] session superseded after stabilizing frame")
+                flowLog("[Flow][RemoteHost] session superseded after stabilizing frame")
                 return
             }
 
@@ -180,7 +180,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
             }
 
             let inputFrame = Self.refinedInputFrame(for: resolvedWindow)
-            print("[Flow][RemoteHost] input frame resolved=\(inputFrame) rawFrame=\(resolvedWindow.frame)")
+            flowLog("[Flow][RemoteHost] input frame resolved=\(inputFrame) rawFrame=\(resolvedWindow.frame)")
 
             lockedValue {
                 targetWindowFrame = inputFrame
@@ -199,7 +199,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         do {
             try await NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         } catch {
-            print("[Flow][RemoteHost] reopenApplication: openApplication FAILED error=\(error)")
+            flowLog("[Flow][RemoteHost] reopenApplication: openApplication FAILED error=\(error)")
         }
         if let app = await waitForRunningApplication(bundleID: bundleID, timeout: 6.0) {
             app.activate(options: [.activateAllWindows])
@@ -211,7 +211,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
 
     private static func ensureAppRunning(bundleID: String) async -> Bool {
         if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
-            print("[Flow][RemoteHost] ensureAppRunning: already running bundleID=\(bundleID) isHidden=\(app.isHidden)")
+            flowLog("[Flow][RemoteHost] ensureAppRunning: already running bundleID=\(bundleID) isHidden=\(app.isHidden)")
             if app.isHidden {
                 app.unhide()
             }
@@ -221,25 +221,25 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         }
 
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
-            print("[Flow][RemoteHost] ensureAppRunning: no application URL found for bundleID=\(bundleID)")
+            flowLog("[Flow][RemoteHost] ensureAppRunning: no application URL found for bundleID=\(bundleID)")
             return false
         }
 
         for attempt in 1...2 {
-            print("[Flow][RemoteHost] ensureAppRunning: launching bundleID=\(bundleID) attempt=\(attempt) url=\(url)")
+            flowLog("[Flow][RemoteHost] ensureAppRunning: launching bundleID=\(bundleID) attempt=\(attempt) url=\(url)")
             do {
                 try await NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
             } catch {
-                print("[Flow][RemoteHost] ensureAppRunning: openApplication FAILED attempt=\(attempt) error=\(error)")
+                flowLog("[Flow][RemoteHost] ensureAppRunning: openApplication FAILED attempt=\(attempt) error=\(error)")
             }
 
             if let app = await waitForRunningApplication(bundleID: bundleID, timeout: 10.0) {
-                print("[Flow][RemoteHost] ensureAppRunning: confirmed running bundleID=\(bundleID) attempt=\(attempt)")
+                flowLog("[Flow][RemoteHost] ensureAppRunning: confirmed running bundleID=\(bundleID) attempt=\(attempt)")
                 app.activate(options: [.activateAllWindows])
                 Task.detached(priority: .utility) { await deminiaturizeWindows(for: app) }
                 return true
             }
-            print("[Flow][RemoteHost] ensureAppRunning: not running yet after attempt=\(attempt), will retry")
+            flowLog("[Flow][RemoteHost] ensureAppRunning: not running yet after attempt=\(attempt), will retry")
         }
         return false
     }
@@ -286,17 +286,17 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         capW = (capW / 2) * 2
         capH = (capH / 2) * 2
 
-        print("[Flow][RemoteHost] buildStream: windowFrame=\(frame) capW=\(capW) capH=\(capH)")
+        flowLog("[Flow][RemoteHost] buildStream: windowFrame=\(frame) capW=\(capW) capH=\(capH)")
 
         guard let newSession = Self.makeCompressionSession(width: Int32(capW), height: Int32(capH), frameRate: targetFrameRate, bitRate: averageBitRate) else {
-            print("[Flow][RemoteHost] buildStream: makeCompressionSession FAILED")
+            flowLog("[Flow][RemoteHost] buildStream: makeCompressionSession FAILED")
             reply(.appMirroringError(error: "Could not create the video encoder."))
             return
         }
 
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
               let display = Self.displayContaining(frame, in: content.displays) else {
-            print("[Flow][RemoteHost] buildStream: could not locate display for this window")
+            flowLog("[Flow][RemoteHost] buildStream: could not locate display for this window")
             VTCompressionSessionInvalidate(newSession)
             reply(.appMirroringError(error: "Could not locate the display for this window."))
             return
@@ -329,12 +329,12 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
             )
             let newStream = SCStream(filter: filter, configuration: config, delegate: self)
             try newStream.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
-            print("[Flow][RemoteHost] buildStream: starting capture")
+            flowLog("[Flow][RemoteHost] buildStream: starting capture")
             try await newStream.startCapture()
-            print("[Flow][RemoteHost] buildStream: capture started")
+            flowLog("[Flow][RemoteHost] buildStream: capture started")
 
             guard lockedValue({ currentSessionID == sessionID }) else {
-                print("[Flow][RemoteHost] buildStream: session superseded after startCapture, stopping")
+                flowLog("[Flow][RemoteHost] buildStream: session superseded after startCapture, stopping")
                 try? await newStream.stopCapture()
                 VTCompressionSessionInvalidate(newSession)
                 return
@@ -359,7 +359,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
             reply(.appMirroringStarted)
             AppMirroringInputInjector.shared.hideCursor()
         } catch {
-            print("[Flow][RemoteHost] buildStream FAILED error=\(error)")
+            flowLog("[Flow][RemoteHost] buildStream FAILED error=\(error)")
             VTCompressionSessionInvalidate(newSession)
             reply(.appMirroringError(error: error.localizedDescription))
         }
@@ -419,7 +419,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        print("[Flow][RemoteHost] stream didStopWithError error=\(error)")
+        flowLog("[Flow][RemoteHost] stream didStopWithError error=\(error)")
         lockedValue { isRunning = false }
         AppMirroringInputInjector.shared.showCursor()
     }
@@ -429,14 +429,14 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         var windowsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
               let windows = windowsRef as? [AXUIElement] else {
-            print("[Flow][RemoteHost] deminiaturizeWindows: could not read AX windows for bundleID=\(app.bundleIdentifier ?? "?")")
+            flowLog("[Flow][RemoteHost] deminiaturizeWindows: could not read AX windows for bundleID=\(app.bundleIdentifier ?? "?")")
             return
         }
         for window in windows {
             var minimizedValue: CFTypeRef?
             guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success,
                   let isMinimized = minimizedValue as? Bool, isMinimized else { continue }
-            print("[Flow][RemoteHost] deminiaturizeWindows: restoring a minimized window for bundleID=\(app.bundleIdentifier ?? "?")")
+            flowLog("[Flow][RemoteHost] deminiaturizeWindows: restoring a minimized window for bundleID=\(app.bundleIdentifier ?? "?")")
             AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
         }
     }
@@ -461,7 +461,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         var windowsRef: CFTypeRef?
         let axResult = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef)
         guard axResult == .success, let axWindows = windowsRef as? [AXUIElement], !axWindows.isEmpty else {
-            print("[Flow][RemoteHost] refinedInputFrame: AX windows lookup FAILED result=\(axResult.rawValue) trusted=\(AXIsProcessTrusted()) pid=\(pid), falling back to rawFrame=\(fallback)")
+            flowLog("[Flow][RemoteHost] refinedInputFrame: AX windows lookup FAILED result=\(axResult.rawValue) trusted=\(AXIsProcessTrusted()) pid=\(pid), falling back to rawFrame=\(fallback)")
             return fallback
         }
 
@@ -498,7 +498,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         }
 
         let resolved = bestFrame ?? fallback
-        print("[Flow][RemoteHost] refinedInputFrame: rawFrame=\(fallback) resolved=\(resolved) matchedAX=\(bestFrame != nil)")
+        flowLog("[Flow][RemoteHost] refinedInputFrame: rawFrame=\(fallback) resolved=\(resolved) matchedAX=\(bestFrame != nil)")
         return resolved
     }
 
@@ -510,7 +510,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
             }
             if attempt < 19 { try await Task.sleep(nanoseconds: 750_000_000) }
         }
-        print("[Flow][RemoteHost] findBestWindow: no on-screen window found for bundleID=\(bundleID), falling back to any window")
+        flowLog("[Flow][RemoteHost] findBestWindow: no on-screen window found for bundleID=\(bundleID), falling back to any window")
         if let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
            let fallback = Self.selectBestWindow(from: content.windows, bundleID: bundleID, requireOnScreen: false) {
             return fallback
@@ -656,7 +656,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
 
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
               let display = Self.displayContaining(windowFrame, in: content.displays) else {
-            print("[Flow][RemoteHost] reconfigureStream: could not locate display, skipping update")
+            flowLog("[Flow][RemoteHost] reconfigureStream: could not locate display, skipping update")
             return
         }
 
@@ -680,7 +680,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         let dimensionsChanged = capW != currentCapW || capH != currentCapH
         let (targetCapW, targetCapH) = dimensionsChanged ? (capW, capH) : (currentCapW, currentCapH)
 
-        print("[Flow][RemoteHost] reconfigureStream: updating sourceRect=\(sourceRect) dimensionsChanged=\(dimensionsChanged) capW=\(targetCapW) capH=\(targetCapH)")
+        flowLog("[Flow][RemoteHost] reconfigureStream: updating sourceRect=\(sourceRect) dimensionsChanged=\(dimensionsChanged) capW=\(targetCapW) capH=\(targetCapH)")
 
         let newConfig = SCStreamConfiguration()
         newConfig.width = targetCapW
@@ -695,7 +695,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         do {
             try await activeStream.updateConfiguration(newConfig)
         } catch {
-            print("[Flow][RemoteHost] reconfigureStream: updateConfiguration FAILED error=\(error)")
+            flowLog("[Flow][RemoteHost] reconfigureStream: updateConfiguration FAILED error=\(error)")
             return
         }
 
@@ -704,7 +704,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
 
         let bitRate = Int(RemoteFrameTransport.shared.currentBitRate())
         guard let newSession = Self.makeCompressionSession(width: Int32(capW), height: Int32(capH), frameRate: targetFrameRate, bitRate: bitRate) else {
-            print("[Flow][RemoteHost] reconfigureStream: makeCompressionSession FAILED")
+            flowLog("[Flow][RemoteHost] reconfigureStream: makeCompressionSession FAILED")
             return
         }
 
@@ -746,7 +746,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         if let existingSession {
             VTCompressionSessionInvalidate(existingSession)
         }
-        print("[Flow][RemoteHost] stopMirroring")
+        flowLog("[Flow][RemoteHost] stopMirroring")
         Task { try? await existingStream?.stopCapture() }
     }
 }

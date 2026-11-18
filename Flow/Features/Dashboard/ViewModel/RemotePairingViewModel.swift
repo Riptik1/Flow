@@ -18,24 +18,24 @@ final class RemotePairingViewModel: ObservableObject {
 
     func generateCode() {
         guard !isBusy else {
-            print("[Flow][Pairing] generateCode: already busy, ignoring tap")
+            flowLog("[Flow][Pairing] generateCode: already busy, ignoring tap")
             return
         }
-        print("[Flow][Pairing] generateCode: start")
+        flowLog("[Flow][Pairing] generateCode: start")
         isBusy = true
         errorMessage = nil
 
         Task {
             do {
-                print("[Flow][Pairing] generateCode: ensuring device is registered")
+                flowLog("[Flow][Pairing] generateCode: ensuring device is registered")
                 try await RemoteConnectionManager.shared.ensureRegistered()
-                print("[Flow][Pairing] generateCode: registered, requesting code from backend")
+                flowLog("[Flow][Pairing] generateCode: registered, requesting code from backend")
                 let response = try await backend.generatePairingCode()
-                print("[Flow][Pairing] generateCode: got code=\(response.code) expiresAt=\(response.expiresAt)")
+                flowLog("[Flow][Pairing] generateCode: got a code expiring at \(response.expiresAt)")
                 pairingCode = response.code
                 startCountdown(until: response.expiresAt)
             } catch {
-                print("[Flow][Pairing] generateCode failed: \(error)")
+                flowLog("[Flow][Pairing] generateCode failed: \(error)")
                 errorMessage = "Couldn't generate a code: \(error.localizedDescription)"
             }
             isBusy = false
@@ -43,7 +43,7 @@ final class RemotePairingViewModel: ObservableObject {
     }
 
     func reset() {
-        print("[Flow][Pairing] reset: start")
+        flowLog("[Flow][Pairing] reset: start")
         countdownTask?.cancel()
         countdownTask = nil
         pairingCode = nil
@@ -53,25 +53,26 @@ final class RemotePairingViewModel: ObservableObject {
         Task {
             do {
                 try await self.backend.leaveDeviceGroup()
-                print("[Flow][Pairing] reset: leaveDeviceGroup succeeded")
+                flowLog("[Flow][Pairing] reset: leaveDeviceGroup succeeded")
             } catch {
-                print("[Flow][Pairing] reset: leaveDeviceGroup FAILED error=\(error)")
+                flowLog("[Flow][Pairing] reset: leaveDeviceGroup FAILED error=\(error)")
             }
             RemoteConnectionManager.shared.disconnect()
+            ConnectionManager.shared.clearTrustedPeers()
             FlowDeviceIdentity.shared.clear()
             await SupabaseManager.shared.signOut()
-            print("[Flow][Pairing] reset: complete")
+            flowLog("[Flow][Pairing] reset: complete")
         }
     }
 
     private func startCountdown(until expiresAt: Date) {
-        print("[Flow][Pairing] startCountdown: until \(expiresAt)")
+        flowLog("[Flow][Pairing] startCountdown: until \(expiresAt)")
         countdownTask?.cancel()
         countdownTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 let remaining = Int(expiresAt.timeIntervalSinceNow)
                 guard remaining > 0 else {
-                    print("[Flow][Pairing] startCountdown: expired, clearing pairing code")
+                    flowLog("[Flow][Pairing] startCountdown: expired, clearing pairing code")
                     self.pairingCode = nil
                     self.remainingSeconds = 0
                     return

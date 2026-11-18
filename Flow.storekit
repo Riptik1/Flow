@@ -1,0 +1,97 @@
+{
+  "identifier" : "A1B2C3D4",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "399.00",
+      "familyShareable" : false,
+      "internalID" : "6741000003",
+      "localizations" : [
+        {
+          "description" : "Pay once, use Flow forever.",
+          "displayName" : "Flow Lifetime",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.flow.lifetime",
+      "referenceName" : "Flow Lifetime",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21800001",
+      "localizations" : [
+
+      ],
+      "name" : "Flow Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "49.00",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6741000001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Full access, billed weekly.",
+              "displayName" : "Flow Weekly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.flow.week",
+          "recurringSubscriptionPeriod" : "P1W",
+          "referenceName" : "Flow Weekly",
+          "subscriptionGroupID" : "21800001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "149.00",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "6741000002",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Full access, billed monthly.",
+              "displayName" : "Flow Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.flow.month",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Flow Monthly",
+          "subscriptionGroupID" : "21800001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

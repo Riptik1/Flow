@@ -55,20 +55,26 @@ final class DeviceRepository: DeviceRepositoryProtocol, ObservableObject {
     }
 
     private func performReload() async {
-        print("[Flow][DeviceRepo] performReload: start")
+        flowLog("[Flow][DeviceRepo] performReload: start")
         guard let iphoneID = try? await SupabaseManager.shared.ensureSession() else {
-            print("[Flow][DeviceRepo] performReload: ensureSession FAILED")
+            flowLog("[Flow][DeviceRepo] performReload: ensureSession FAILED")
             return
         }
         guard let links = try? await FlowBackendClient.shared.fetchTrustedLinks(iphoneID: iphoneID) else {
-            print("[Flow][DeviceRepo] performReload: fetchTrustedLinks FAILED")
+            flowLog("[Flow][DeviceRepo] performReload: fetchTrustedLinks FAILED")
             return
         }
         guard !Task.isCancelled else { return }
 
         let cachedByLink = Dictionary(uniqueKeysWithValues: devices.map { ($0.linkID, $0) })
         var resolved: [SavedDevice] = []
+        // Re-pairing the same Mac creates a new link; only list each Mac once (newest link).
+        var newestPerMac: [UUID: DeviceLinkRow] = [:]
         for link in links {
+            if let existing = newestPerMac[link.macID], existing.createdAt >= link.createdAt { continue }
+            newestPerMac[link.macID] = link
+        }
+        for link in newestPerMac.values {
             guard !Task.isCancelled else { return }
             let info = try? await FlowBackendClient.shared.fetchMacInfo(id: link.macID)
             let cached = cachedByLink[link.id]
@@ -85,7 +91,7 @@ final class DeviceRepository: DeviceRepositoryProtocol, ObservableObject {
         guard !Task.isCancelled else { return }
 
         let sorted = resolved.sorted { $0.lastConnected > $1.lastConnected }
-        print("[Flow][DeviceRepo] performReload: resolved \(sorted.count) device(s)")
+        flowLog("[Flow][DeviceRepo] performReload: resolved \(sorted.count) device(s)")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.devices = sorted

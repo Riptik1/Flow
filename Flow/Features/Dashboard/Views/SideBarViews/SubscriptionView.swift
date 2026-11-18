@@ -51,6 +51,9 @@ struct SubscriptionView: View {
                 pageIndicator
                     .padding(.top, 18)
 
+                subscriptionFooter
+                    .padding(.top, 14)
+
                 Spacer(minLength: 0)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
@@ -60,6 +63,14 @@ struct SubscriptionView: View {
         .background(backgroundView)
         .navigationTitle("Subscription")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Subscription", isPresented: Binding(
+            get: { vm.message != nil },
+            set: { if !$0 { vm.message = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(vm.message ?? "")
+        }
         .onAppear {
             withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
                 appear = true
@@ -85,6 +96,26 @@ struct SubscriptionView: View {
         }
         .animation(.easeInOut(duration: 0.5), value: selection)
         .ignoresSafeArea()
+    }
+
+    private var subscriptionFooter: some View {
+        VStack(spacing: 8) {
+            if let renewal = vm.renewalText {
+                Text(renewal)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 18) {
+                Button("Restore Purchases") { vm.restore() }
+                if vm.hasActiveSubscription {
+                    Button("Manage / Cancel") { vm.manage() }
+                }
+            }
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+            .disabled(vm.isBusy)
+        }
     }
 
     private var pageIndicator: some View {
@@ -115,7 +146,7 @@ struct SubscriptionView: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(tier.price)
+                    Text(vm.price(for: tier))
                         .font(.system(size: 30, weight: .bold, design: .rounded))
                     if let suffix = tier.priceSuffix {
                         Text(suffix)
@@ -187,6 +218,7 @@ struct SubscriptionView: View {
     @ViewBuilder
     private func actionButton(for tier: PlanTier) -> some View {
         let isCurrent = vm.subTier == tier.tierKey
+        let isUnavailable = isCurrent || vm.subTier == "lifetime" || vm.isBusy
 
         Button {
             vm.select(tier)
@@ -207,7 +239,7 @@ struct SubscriptionView: View {
                 .shadow(color: isCurrent ? .clear : (tier.gradient.last?.opacity(0.4) ?? .clear), radius: 14, y: 8)
         }
         .buttonStyle(.plain)
-        .disabled(isCurrent)
+        .disabled(isUnavailable)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: vm.subTier)
     }
 }

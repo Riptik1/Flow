@@ -40,6 +40,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !isAutoLaunch() {
             showMainWindow()
         }
+        MacPermissionManager.shared.runFirstLaunchOnboarding()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

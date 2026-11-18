@@ -69,7 +69,7 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
         var windowsRef: CFTypeRef?
         let axResult = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef)
         guard axResult == .success, let axWindows = windowsRef as? [AXUIElement], !axWindows.isEmpty else {
-            print("[Flow][AppMirroring] refinedInputFrame: AX windows lookup FAILED result=\(axResult.rawValue) trusted=\(AXIsProcessTrusted()) pid=\(pid), falling back to rawFrame=\(fallback)")
+            flowLog("[Flow][AppMirroring] refinedInputFrame: AX windows lookup FAILED result=\(axResult.rawValue) trusted=\(AXIsProcessTrusted()) pid=\(pid), falling back to rawFrame=\(fallback)")
             return fallback
         }
 
@@ -106,7 +106,7 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
         }
 
         let resolved = bestFrame ?? fallback
-        print("[Flow][AppMirroring] refinedInputFrame: rawFrame=\(fallback) resolved=\(resolved) matchedAX=\(bestFrame != nil)")
+        flowLog("[Flow][AppMirroring] refinedInputFrame: rawFrame=\(fallback) resolved=\(resolved) matchedAX=\(bestFrame != nil)")
         return resolved
     }
 
@@ -114,12 +114,12 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
 
     private static func ensureAccessibilityPermission() {
         let trusted = AXIsProcessTrusted()
-        print("[Flow][AppMirroring] Accessibility permission check: trusted=\(trusted)")
+        flowLog("[Flow][AppMirroring] Accessibility permission check: trusted=\(trusted)")
         guard !trusted, !hasPromptedAccessibility else { return }
         hasPromptedAccessibility = true
         let options: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
         let promptedTrusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
-        print("[Flow][AppMirroring] Accessibility permission prompt shown, trusted=\(promptedTrusted). If this stays false, grant access in System Settings > Privacy & Security > Accessibility for this app, then quit and relaunch it.")
+        flowLog("[Flow][AppMirroring] Accessibility permission prompt shown, trusted=\(promptedTrusted). If this stays false, grant access in System Settings > Privacy & Security > Accessibility for this app, then quit and relaunch it.")
     }
 
     private func startMirroring(bundleID: String, reply: @escaping (FlowMessage) -> Void) {

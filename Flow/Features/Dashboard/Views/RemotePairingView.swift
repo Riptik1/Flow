@@ -17,7 +17,7 @@ struct RemotePairingView: View {
                         .foregroundStyle(.blue)
                     Text("Connect to Your Mac")
                         .font(.system(size: 20, weight: .bold))
-                    Text("Open Flow on your Mac and tap Generate Pairing Code, then enter it below.")
+                    Text("On your Mac, click “Generate Pairing Code”, then type the code here.")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -78,8 +78,15 @@ struct RemotePairingView: View {
                 }
             }
         }
-        .onChange(of: connection.state) { oldState, newState in
-            if newState == .connected {
+        .onChange(of: connection.pairingCompletionToken) { _, _ in
+            // Fires when the Mac accepted the code – also when the phone is already
+            // connected over Wi-Fi and the remote link is only stored for later.
+            if isSubmitting {
+                finish(success: true, message: nil)
+            }
+        }
+        .onChange(of: connection.state) { _, newState in
+            if newState == .connected, isSubmitting {
                 finish(success: true, message: nil)
             }
         }

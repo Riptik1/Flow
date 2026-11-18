@@ -11,7 +11,9 @@ struct DevicesView: View {
     let factory: FlowViewModelFactory
     @StateObject private var vm: DevicesViewModel
     @StateObject private var connection = RemoteConnectionManager.shared
+    @ObservedObject private var repo = FlowConnectionRepository.shared
     @Environment(\.scenePhase) private var scenePhase
+    @State private var showRemotePairing = false
 
     init(factory: FlowViewModelFactory = ViewModelFactory.shared) {
         self.factory = factory
@@ -21,12 +23,15 @@ struct DevicesView: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 20) {
-                if vm.devices.isEmpty {
+                if vm.devices.isEmpty && localPeers.isEmpty {
                     emptyState
                 } else {
                     VStack(spacing: 12) {
                         ForEach(vm.devices) { device in
                             deviceRow(device)
+                        }
+                        ForEach(localPeers) { peer in
+                            localPeerRow(peer)
                         }
                     }
                     .padding(.horizontal, 20)
@@ -41,12 +46,77 @@ struct DevicesView: View {
         .onAppear {
             vm.reload()
             syncConnectedDevice()
+            if repo.state == .disconnected { repo.startSearching() }
         }
+        .sheet(isPresented: $showRemotePairing) { RemotePairingView() }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active { vm.reload() }
         }
         .onChange(of: connection.state) { _, _ in
             syncConnectedDevice()
+        }
+    }
+
+    /// Macs reachable over Wi-Fi (connected or nearby) that are not already listed as a paired device.
+    private var localPeers: [DiscoveredPeer] {
+        var peers = repo.discoveredPeers.filter { $0.platform == "Mac" }
+        if let current = repo.connectedPeer, current.transport == .local,
+           !peers.contains(where: { $0.deviceName == current.deviceName }) {
+            peers.insert(current, at: 0)
+        }
+        let pairedNames = Set(vm.devices.map(\.name))
+        return peers.filter { !pairedNames.contains($0.deviceName) }
+    }
+
+    private func localPeerRow(_ peer: DiscoveredPeer) -> some View {
+        let isConnected = repo.state == .connected && repo.connectedPeer?.deviceName == peer.deviceName
+        return GlassCard(cornerRadius: 16, padding: 16) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.blue.opacity(0.12))
+                    Image("macbook")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 30, height: 30)
+                }
+                .frame(width: 48, height: 48)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(peer.deviceName)
+                        .font(.system(size: 16, weight: .semibold))
+                    if isConnected {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 6, height: 6)
+                                .shadow(color: .green.opacity(0.7), radius: 3)
+                            Text("Connected · Same Wi‑Fi")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("Nearby · Same Wi‑Fi")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                    Label("Tap to enable remote access", systemImage: "personalhotspot")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.blue)
+                }
+
+                Spacer()
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { showRemotePairing = true }
+        .contextMenu {
+            Button {
+                repo.connect(to: peer)
+            } label: {
+                Label("Connect", systemImage: "personalhotspot")
+            }
+            .disabled(isConnected)
         }
     }
 
@@ -66,7 +136,7 @@ struct DevicesView: View {
             }
             Text("No Devices")
                 .font(.system(size: 18, weight: .semibold))
-            Text("Connect to your Mac to see it here")
+            Text("Connect to your Mac to see it here. Devices on your Wi-Fi and Macs paired for remote access are listed.")
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -77,6 +147,7 @@ struct DevicesView: View {
 
     private func deviceRow(_ device: SavedDevice) -> some View {
         let isThisDeviceConnected = connection.connectedLinkID == device.linkID
+            || (repo.state == .connected && repo.connectedPeer?.deviceName == device.name)
 
         return GlassCard(cornerRadius: 16, padding: 16) {
             HStack(spacing: 14) {
@@ -109,6 +180,9 @@ struct DevicesView: View {
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
+                    Label("Can be connected remotely", systemImage: "globe")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.green)
                 }
 
                 Spacer()

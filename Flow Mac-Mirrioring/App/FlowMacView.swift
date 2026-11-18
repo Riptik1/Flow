@@ -299,15 +299,11 @@ struct FlowMacView: View {
                 permissions[index].isGranted = AXIsProcessTrusted()
             }
 
-        case "Input Monitoring":
-            let status = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
-            if status == kIOHIDAccessTypeUnknown {
-                IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    permissions[index].isGranted = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
-                }
-            } else {
-                NSWorkspace.shared.open(URL(string: permissions[index].settingsURL)!)
+        case "Screen Recording":
+            // Show macOS's own permission prompt (this also adds Flow to the list in Settings).
+            MacPermissionManager.shared.requestScreenRecording()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                permissions[index].isGranted = CGPreflightScreenCaptureAccess()
             }
 
         case "Auto Connect":
@@ -412,14 +408,14 @@ struct FlowMacView: View {
                 }
             ),
             MacPermission(
-                title: "Input Monitoring",
-                detail: "Listens to global keyboard and trackpad events streamed from your iPhone.",
-                icon: "keyboard",
-                enables: ["Keyboard Input", "Trackpad Gestures"],
-                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-                isGranted: IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted,
-                checkGranted: { IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted },
-                requestAccess: { IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
+                title: "Screen Recording",
+                detail: "Lets your iPhone see and use Mac apps remotely (app mirroring). macOS may ask you to quit and reopen Flow after allowing it.",
+                icon: "rectangle.on.rectangle",
+                enables: ["App Mirroring", "Remote Apps"],
+                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                isGranted: CGPreflightScreenCaptureAccess(),
+                checkGranted: { CGPreflightScreenCaptureAccess() },
+                requestAccess: { MacPermissionManager.shared.requestScreenRecording() }
             ),
             MacPermission(
                 title: "Auto Connect",

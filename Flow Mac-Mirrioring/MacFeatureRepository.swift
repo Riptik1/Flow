@@ -15,7 +15,8 @@ final class MacFeatureRepository {
     private init() {}
 
     func handle(_ message: FlowMessage, reply: @escaping (FlowMessage) -> Void) {
-        print("[Flow][MacRepo] handle: message=\(message)")
+        flowLog("[Flow][MacRepo] handle: message=\(message.logLabel)")
+        guard MacPermissionManager.shared.allows(message, reply: reply) else { return }
         AppLaunchService.shared.handle(message, reply: reply)
         ClipboardService.shared.handle(message, reply: reply)
         FileService.shared.handle(message, reply: reply)

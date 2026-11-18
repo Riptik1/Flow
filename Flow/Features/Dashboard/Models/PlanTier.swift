@@ -20,6 +20,14 @@ enum PlanTier: Int, CaseIterable {
         }
     }
 
+    var productID: String {
+        switch self {
+        case .weekly: return StoreKitManager.ProductID.weekly
+        case .monthly: return StoreKitManager.ProductID.monthly
+        case .lifetime: return StoreKitManager.ProductID.lifetime
+        }
+    }
+
     var title: String {
         switch self {
         case .weekly: return "Weekly"

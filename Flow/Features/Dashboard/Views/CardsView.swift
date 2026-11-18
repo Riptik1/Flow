@@ -136,7 +136,7 @@ struct DeviceInfoCard: View {
                                     radius: 3, x: 0, y: 0
                                 )
 
-                            Text(connection.state == .connected ? "Connected to" : "No Mac Connected")
+                            Text(connectionLabel)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -145,10 +145,10 @@ struct DeviceInfoCard: View {
                             .font(.title2)
                             .fontWeight(.bold)
                             .foregroundStyle(connection.state == .connected ? .primary : .tertiary)
-                            .minimumScaleFactor(0.8)
-                            .lineLimit(3)
+                            .minimumScaleFactor(0.6)
+                            .lineLimit(2)
                     }
-                    .padding(.top, -25)
+                    .frame(maxHeight: .infinity, alignment: .center)
 
                     Spacer()
 
@@ -164,8 +164,7 @@ struct DeviceInfoCard: View {
                         .padding(.trailing, -33)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.top, 8)
-                .padding(.vertical, -26)
+                .frame(height: 70)
             }
         }
         .sheet(isPresented: $showSearchSheet) {
@@ -173,16 +172,23 @@ struct DeviceInfoCard: View {
         }
     }
 
+    private var connectionLabel: String {
+        guard connection.state == .connected else { return "No Mac Connected" }
+        return connection.connectedPeer?.transport == .remote ? "Connected remotely to" : "Connected to"
+    }
+
     private var cardOverlayState: CardOverlayState {
         switch connection.state {
         case .disconnected:          return .disconnected
-        case .searching, .connecting: return .connecting
+        // While only searching nothing is connecting yet – keep the Connect button usable.
+        case .searching:             return .disconnected
+        case .connecting:            return .connecting
         case .connected:             return .none
         }
     }
 
     private func handleConnectTap() {
-        guard case .disconnected = connection.state else { return }
+        guard connection.state == .disconnected || connection.state == .searching else { return }
         connection.startSearching()
         showSearchSheet = true
     }

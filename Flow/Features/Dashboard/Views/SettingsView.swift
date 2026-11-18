@@ -214,6 +214,7 @@ struct SettingsView: View {
 
     private var tierDisplayName: String {
         switch subTier {
+        case "weekly": return "Weekly Pro"
         case "monthly": return "Monthly Pro"
         case "lifetime": return "Lifetime Pro"
         default: return "Free"

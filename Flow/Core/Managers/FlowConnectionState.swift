@@ -257,7 +257,7 @@ final class ConnectionManager: NSObject, ObservableObject {
         connectTimeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.pendingInvitePeerID == peerID, self.state == .connecting else { return }
-            print("[Flow][Local] connect timeout: invite to \(peerID.displayName) never resolved, resuming search")
+            flowLog("[Flow][Local] connect timeout: invite to \(peerID.displayName) never resolved, resuming search")
             self.pendingInvitePeerID = nil
             self.session?.disconnect()
             self.setupSession()
@@ -273,7 +273,7 @@ final class ConnectionManager: NSObject, ObservableObject {
     }
 
     func recoverFromSystemWake() {
-        print("[Flow][Local] recoverFromSystemWake: forcing clean session rebuild")
+        flowLog("[Flow][Local] recoverFromSystemWake: forcing clean session rebuild")
         stopKeepalive()
         cancelConnectTimeout()
         pendingInvitePeerID = nil
@@ -323,7 +323,7 @@ final class ConnectionManager: NSObject, ObservableObject {
     private func autoConnectIfSaved(_ peer: DiscoveredPeer) {
         guard let saved = savedPeerName, peer.deviceName == saved else { return }
         if peer.deviceName == flakyPeerName, let until = flakyCooldownUntil, Date() < until {
-            print("[Flow][Local] autoConnectIfSaved: \(peer.deviceName) is in flaky cooldown until \(until), skipping auto-invite so remote can take over")
+            flowLog("[Flow][Local] autoConnectIfSaved: \(peer.deviceName) is in flaky cooldown until \(until), skipping auto-invite so remote can take over")
             return
         }
         #if canImport(UIKit)
@@ -344,6 +344,27 @@ final class ConnectionManager: NSObject, ObservableObject {
     #endif
 
     #if canImport(AppKit)
+    private static let trustedPeersKey = "flow.trustedLocalPeers"
+    fileprivate var approvalsInFlight: Set<String> {
+        get { Self.inFlight }
+        set { Self.inFlight = newValue }
+    }
+    private static var inFlight = Set<String>()
+
+    fileprivate func isTrustedPeer(named name: String) -> Bool {
+        (UserDefaults.standard.stringArray(forKey: Self.trustedPeersKey) ?? []).contains(name)
+    }
+
+    fileprivate func trustPeer(named name: String) {
+        var list = UserDefaults.standard.stringArray(forKey: Self.trustedPeersKey) ?? []
+        if !list.contains(name) { list.append(name) }
+        UserDefaults.standard.set(list, forKey: Self.trustedPeersKey)
+    }
+
+    func clearTrustedPeers() {
+        UserDefaults.standard.removeObject(forKey: Self.trustedPeersKey)
+    }
+
     private func resolvedMacModel() -> String {
         var size = 0
         let result1 = sysctlbyname("hw.model", nil, &size, nil, 0)
@@ -398,7 +419,7 @@ extension ConnectionManager: MCSessionDelegate {
                 guard wasConnectedPeer || wasPendingInvite else { return }
 
                 if wasConnectedPeer, let since = self.connectedSince, Date().timeIntervalSince(since) < 8.0 {
-                    print("[Flow][Local] notConnected: \(peerID.displayName) dropped \(Date().timeIntervalSince(since))s after connecting, treating as flaky and backing off auto-invite for 45s")
+                    flowLog("[Flow][Local] notConnected: \(peerID.displayName) dropped \(Date().timeIntervalSince(since))s after connecting, treating as flaky and backing off auto-invite for 45s")
                     self.flakyPeerName = peerID.displayName
                     self.flakyCooldownUntil = Date().addingTimeInterval(45)
                 }
@@ -439,6 +460,8 @@ extension ConnectionManager: MCSessionDelegate {
                 try session.send(replyData, toPeers: [peerID], with: mode)
             } catch {}
         }
+
+        guard MacPermissionManager.shared.allows(message, reply: sendReply) else { return }
 
         AppLaunchService.shared.handle(message, reply: sendReply)
         ClipboardService.shared.handle(message) { sendReply($0) }
@@ -520,7 +543,35 @@ extension ConnectionManager: MCNearbyServiceAdvertiserDelegate {
         withContext context: Data?,
         invitationHandler: @escaping (Bool, MCSession?) -> Void
     ) {
+        #if canImport(AppKit)
+        // A Mac must never hand control to an unknown phone silently. The first time
+        // a phone connects over the local network the user has to allow it.
+        let peerName = peerID.displayName
+        DispatchQueue.main.async {
+            if self.isTrustedPeer(named: peerName) {
+                invitationHandler(true, self.session)
+                return
+            }
+            guard !self.approvalsInFlight.contains(peerName) else {
+                invitationHandler(false, nil)
+                return
+            }
+            self.approvalsInFlight.insert(peerName)
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Allow “\(peerName)” to connect?"
+            alert.informativeText = "It will be able to control this Mac. Only allow your own iPhone."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Allow")
+            alert.addButton(withTitle: "Don't Allow")
+            let allowed = alert.runModal() == .alertFirstButtonReturn
+            self.approvalsInFlight.remove(peerName)
+            if allowed { self.trustPeer(named: peerName) }
+            invitationHandler(allowed, allowed ? self.session : nil)
+        }
+        #else
         invitationHandler(true, session)
+        #endif
     }
 
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {

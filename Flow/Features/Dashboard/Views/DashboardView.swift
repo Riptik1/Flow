@@ -33,6 +33,15 @@ struct DashboardView: View {
     @State private var showRemotePairing = false
     @FocusState private var spotlightFocused: Bool
 
+    @AppStorage("flow.didFinishSetup") private var didFinishSetup = false
+    @AppStorage("flow.remotePromptSnoozeUntil") private var remotePromptSnoozeUntil: Double = 0
+    @ObservedObject private var localNetwork = LocalNetworkPermission.shared
+    @ObservedObject private var deviceRepo = DeviceRepository.shared
+    @State private var showRemotePrompt = false
+    @State private var remotePromptShownThisSession = false
+    @State private var showLocalNetworkDenied = false
+    @State private var localDeniedShownThisSession = false
+
     private let sidebarWidth: CGFloat = 270
     private let sidebarAnimation: Animation = .spring(response: 0.22, dampingFraction: 0.92)
 
@@ -118,6 +127,26 @@ struct DashboardView: View {
             .navigationDestination(isPresented: $showDevices) { DevicesView(factory: factory) }
         }
         .sheet(isPresented: $showRemotePairing) { RemotePairingView() }
+        .fullScreenCover(isPresented: Binding(get: { !didFinishSetup }, set: { _ in })) {
+            FirstLaunchSetupView { didFinishSetup = true }
+        }
+        .alert("Use your Mac from anywhere?", isPresented: $showRemotePrompt) {
+            Button("Enter Code") { showRemotePairing = true }
+            Button("Not Now", role: .cancel) {
+                // Don't nag: ask again in 3 days.
+                remotePromptSnoozeUntil = Date().addingTimeInterval(3 * 24 * 3600).timeIntervalSince1970
+            }
+        } message: {
+            Text("You're connected on Wi-Fi. To also connect from anywhere:\n\n1. On your Mac, click “Generate Pairing Code”.\n2. Tap “Enter Code” and type it.")
+        }
+        .alert("Local Network is off", isPresented: $showLocalNetworkDenied) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text("Flow needs it to find your Mac on Wi-Fi. Turn it on in Settings.")
+        }
         .onAppear {
             print("DashboardView[lifecycle]: onAppear")
             vm.start()
@@ -141,6 +170,32 @@ struct DashboardView: View {
         }
         .onChange(of: connection.state) { _, newState in
             print("DashboardView[lifecycle]: observed connection.state -> \(newState)")
+            if newState == .connected, connection.connectedPeer?.transport == .local {
+                scheduleRemotePrompt()
+            }
+        }
+        .onChange(of: localNetwork.status) { _, status in
+            if status == .denied, didFinishSetup, !localDeniedShownThisSession {
+                localDeniedShownThisSession = true
+                showLocalNetworkDenied = true
+            }
+        }
+    }
+
+    /// After a Wi-Fi connection, offer to also set up remote access (once per launch,
+    /// and never when a remote Mac is already paired).
+    private func scheduleRemotePrompt() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            guard didFinishSetup,
+                  !remotePromptShownThisSession,
+                  !showRemotePairing,
+                  connection.state == .connected,
+                  connection.connectedPeer?.transport == .local,
+                  Date().timeIntervalSince1970 > remotePromptSnoozeUntil,
+                  DeviceRepository.shared.currentDevices.isEmpty
+            else { return }
+            remotePromptShownThisSession = true
+            showRemotePrompt = true
         }
     }
 
@@ -203,6 +258,11 @@ struct DashboardView: View {
         .padding(.vertical, 8)
     }
 
+    private var isRemoteConfiguredForConnectedMac: Bool {
+        guard let peer = connection.connectedPeer else { return false }
+        return peer.transport == .remote || deviceRepo.devices.contains { $0.name == peer.deviceName }
+    }
+
     private var connectionKindLabel: String {
         connection.connectedPeer?.transport == .remote ? "Remote" : "Same Wi‑Fi"
     }
@@ -241,6 +301,10 @@ struct DashboardView: View {
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.blue.opacity(0.1)))
             .foregroundStyle(.blue)
 
+        case .connected where isRemoteConfiguredForConnectedMac:
+            // Already set up for remote access – nothing to offer, the device card says how we're connected.
+            EmptyView()
+
         case .connected:
             Button(action: { showRemotePairing = true }) {
                 HStack(spacing: 8) {
@@ -269,21 +333,28 @@ struct DashboardView: View {
     }
 
     private var iPhoneLayout: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 14) {
-                customTopBar.padding(.top, -22)
+        VStack(spacing: 0) {
+            // Fixed header: stays in place while the cards scroll underneath.
+            customTopBar
+                .padding(.horizontal, 16)
+                .padding(.top, -8)
+                .background(Color(uiColor: .systemBackground))
+                .zIndex(1)
 
-                connectionStatusBanner
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 14) {
+                    connectionStatusBanner
 
                 DeviceInfoCard()
                 TrackpadCard()
                 HStack(alignment: .top, spacing: 14) { KeyboardCard(); FilesCard() }.frame(height: 170)
                 quickActionsView(style: .grid)
                 RecentFilesView(factory: factory)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+                .padding(.bottom, 24)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 24)
         }
     }
 

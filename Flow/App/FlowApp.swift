@@ -13,6 +13,10 @@ struct FlowApp: App {
     @State private var displayedScheme: ColorScheme?
     @State private var transitionOverlayOpacity: Double = 0
 
+    init() {
+        StoreKitManager.shared.start()
+    }
+
     var body: some Scene {
         WindowGroup {
             DashboardView()

@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_flow-ctrl._tcp</string>
+		<string>_flow-ctrl._udp</string>
+		<string>_flow-video._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Flow uses the local network to find and connect to your iPhone.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Flow controls apps such as Finder and Terminal on this Mac when you ask it to from your iPhone.</string>
+</dict>
 </plist>

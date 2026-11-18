@@ -35,7 +35,7 @@ final class RemoteFrameTransport {
         sendDurationsMs.removeAll()
         targetBitRate = maxBitRate
         lock.unlock()
-        print("[Flow][FrameTransport] attach: channel=\(channel == nil ? "nil" : "set") targetBitRate=\(maxBitRate)")
+        flowLog("[Flow][FrameTransport] attach: channel=\(channel == nil ? "nil" : "set") targetBitRate=\(maxBitRate)")
     }
 
     func beginNewSession() {
@@ -45,7 +45,7 @@ final class RemoteFrameTransport {
         sendDurationsMs.removeAll()
         consecutiveStalls = 0
         lock.unlock()
-        print("[Flow][FrameTransport] beginNewSession: cleared any stale in-flight slot, forcing fresh keyframe")
+        flowLog("[Flow][FrameTransport] beginNewSession: cleared any stale in-flight slot, forcing fresh keyframe")
     }
 
     func reserveSlot() -> Bool {
@@ -125,14 +125,14 @@ final class RemoteFrameTransport {
 
         guard stalls >= maxConsecutiveStalls else {
             lock.unlock()
-            print("[Flow][FrameTransport] sendReservedFrame: stall #\(stalls) after \(elapsedMs)ms, dropping this frame and requesting a fresh keyframe, not reconnecting yet")
+            flowLog("[Flow][FrameTransport] sendReservedFrame: stall #\(stalls) after \(elapsedMs)ms, dropping this frame and requesting a fresh keyframe, not reconnecting yet")
             return
         }
 
         channel = nil
         consecutiveStalls = 0
         lock.unlock()
-        print("[Flow][FrameTransport] sendReservedFrame: \(stalls) consecutive stalls, retiring this channel and requesting a reconnect")
+        flowLog("[Flow][FrameTransport] sendReservedFrame: \(stalls) consecutive stalls, retiring this channel and requesting a reconnect")
         onChannelStalled?()
     }
 
@@ -147,7 +147,7 @@ final class RemoteFrameTransport {
             sendDurationsMs.removeAll()
             let previous = targetBitRate
             targetBitRate = max(minBitRate, targetBitRate - 400_000)
-            print("[Flow][FrameTransport] finishSend: FAILED elapsedMs=\(elapsedMs) bitRate \(previous) -> \(targetBitRate), requesting keyframe")
+            flowLog("[Flow][FrameTransport] finishSend: FAILED elapsedMs=\(elapsedMs) bitRate \(previous) -> \(targetBitRate), requesting keyframe")
             return
         }
 
@@ -160,13 +160,13 @@ final class RemoteFrameTransport {
             let previous = targetBitRate
             targetBitRate = max(minBitRate, targetBitRate - 300_000)
             sendDurationsMs.removeAll()
-            print("[Flow][FrameTransport] finishSend: avgSendMs=\(average) too slow, bitRate \(previous) -> \(targetBitRate)")
+            flowLog("[Flow][FrameTransport] finishSend: avgSendMs=\(average) too slow, bitRate \(previous) -> \(targetBitRate)")
         } else if average < 120 {
             let previous = targetBitRate
             targetBitRate = min(maxBitRate, targetBitRate + 200_000)
             sendDurationsMs.removeAll()
             if previous != targetBitRate {
-                print("[Flow][FrameTransport] finishSend: avgSendMs=\(average) healthy, bitRate \(previous) -> \(targetBitRate)")
+                flowLog("[Flow][FrameTransport] finishSend: avgSendMs=\(average) healthy, bitRate \(previous) -> \(targetBitRate)")
             }
         }
     }

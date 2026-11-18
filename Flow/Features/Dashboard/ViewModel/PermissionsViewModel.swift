@@ -57,8 +57,17 @@ final class PermissionsViewModel: ObservableObject {
         bluetoothAuthorized = CBCentralManager.authorization == .allowedAlways
     }
 
+    private var localNetworkObserver: AnyCancellable?
+
     private func checkLocalNetwork() {
-        localNetworkAuthorized = false
+        if localNetworkObserver == nil {
+            localNetworkObserver = LocalNetworkPermission.shared.$status
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] status in
+                    self?.localNetworkAuthorized = status == .granted
+                }
+        }
+        LocalNetworkPermission.shared.check()
     }
 
     func handleNotifications(openSettings: @escaping () -> Void) {
@@ -116,6 +125,14 @@ final class PermissionsViewModel: ObservableObject {
     }
 
     func handleLocalNetwork() {
-        showLocalNetworkAlert = true
+        switch LocalNetworkPermission.shared.status {
+        case .granted:
+            break
+        case .denied:
+            showLocalNetworkAlert = true
+        case .unknown:
+            // First time: this makes iOS show its own permission prompt.
+            LocalNetworkPermission.shared.check()
+        }
     }
 }

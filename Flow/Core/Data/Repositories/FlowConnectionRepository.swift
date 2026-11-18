@@ -18,13 +18,14 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
 
     @Published var state: FlowConnectionState = .disconnected {
         didSet {
-            print("[Flow][Repo] state changed: \(oldValue) -> \(state)")
+            flowLog("[Flow][Repo] state changed: \(oldValue) -> \(state)")
         }
     }
     @Published var discoveredPeers: [DiscoveredPeer] = []
     @Published var connectedPeer: DiscoveredPeer? = nil
     @Published var pairingError: String? = nil
     @Published var macProfileImageData: Data? = nil
+    @Published private(set) var pairingCompletionToken = UUID()
 
     private let remote = RemoteConnectionManager.shared
     private let local = ConnectionManager.shared
@@ -46,7 +47,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
     private var cancellables = Set<AnyCancellable>()
 
     private init() {
-        print("[Flow][Repo] init")
+        flowLog("[Flow][Repo] init")
         bindRemote()
         bindLocal()
         startNetworkMonitoring()
@@ -55,11 +56,13 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
 
     private func startNetworkMonitoring() {
         pathMonitor.pathUpdateHandler = { [weak self] path in
-            let onWiFi = path.usesInterfaceType(.wifi)
+            // Wi-Fi or wired Ethernet both count as "same network" for local control.
+            let onWiFi = path.status == .satisfied
+                && (path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet))
             DispatchQueue.main.async {
                 guard let self else { return }
                 if self.isOnWiFi != onWiFi {
-                    print("[Flow][Repo] network path changed: onWiFi=\(onWiFi)")
+                    flowLog("[Flow][Repo] network path changed: onWiFi=\(onWiFi)")
                 }
                 self.isOnWiFi = onWiFi
             }
@@ -76,12 +79,19 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
             .sink { [weak self] hasPeer in
                 guard let self else { return }
                 if hasPeer {
-                    print("[Flow][Repo] connectedPeer active, starting Mac lock monitoring")
+                    flowLog("[Flow][Repo] connectedPeer active, starting Mac lock monitoring")
                     MacUnlockService.shared.startMonitoring { [weak self] message in
                         self?.send(message)
                     }
+                    // Tell the user right away if the connected phone will not be able to
+                    // use some features because a Mac permission is still off.
+                    MacPermissionManager.shared.warnIfMissing(
+                        reason: "Your iPhone just connected.",
+                        throttleKey: "connected",
+                        minInterval: 300
+                    )
                 } else {
-                    print("[Flow][Repo] connectedPeer cleared, stopping Mac lock monitoring")
+                    flowLog("[Flow][Repo] connectedPeer cleared, stopping Mac lock monitoring")
                     MacUnlockService.shared.stopMonitoring()
                 }
             }
@@ -91,21 +101,47 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
     private func bindMacUnlockMonitoring() {}
     #endif
 
+    /// One state for the UI: connected beats connecting beats searching.
+    /// Previously whichever transport published last simply overwrote the other,
+    /// which made the UI flip to "disconnected" while a connection was fine.
+    private func recomputeState() {
+        let merged: FlowConnectionState
+        switch connectedPeer?.transport {
+        case .local?:
+            merged = local.state == .connected ? .connected : (local.state == .connecting ? .connecting : .disconnected)
+        case .remote?:
+            merged = remote.state
+        case nil:
+            if remote.state == .connected || local.state == .connected {
+                merged = .connected
+            } else if remote.state == .connecting || local.state == .connecting {
+                merged = .connecting
+            } else if local.state == .searching {
+                merged = .searching
+            } else {
+                merged = .disconnected
+            }
+        }
+        if merged != state { state = merged }
+    }
+
     private func bindRemote() {
+        remote.$pairingCompletionToken
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] token in self?.pairingCompletionToken = token }
+            .store(in: &cancellables)
+
         remote.$state
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] newState in
-                guard let self else { return }
-                guard self.connectedPeer?.transport != .local else { return }
-                self.state = newState
-            }
+            .sink { [weak self] _ in self?.recomputeState() }
             .store(in: &cancellables)
 
         remote.$connectedPeer
             .receive(on: DispatchQueue.main)
             .sink { [weak self] peer in
                 guard let self else { return }
-                print("[Flow][Repo] connectedPeer changed (remote): \(peer?.deviceName ?? "nil")")
+                flowLog("[Flow][Repo] connectedPeer changed (remote): \(peer?.deviceName ?? "nil")")
                 if let peer {
                     guard self.connectedPeer?.transport != .local else { return }
                     self.connectedPeer = peer
@@ -116,6 +152,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
                         self.local.startAutoConnect()
                     }
                 }
+                self.recomputeState()
             }
             .store(in: &cancellables)
 
@@ -123,7 +160,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
             .receive(on: DispatchQueue.main)
             .sink { [weak self] error in
                 if let error {
-                    print("[Flow][Repo] pairingError set: \(error)")
+                    flowLog("[Flow][Repo] pairingError set: \(error)")
                 }
                 self?.pairingError = error
             }
@@ -149,11 +186,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
     private func bindLocal() {
         local.$state
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] newState in
-                guard let self else { return }
-                guard self.connectedPeer?.transport != .remote else { return }
-                self.state = newState
-            }
+            .sink { [weak self] _ in self?.recomputeState() }
             .store(in: &cancellables)
 
         local.$discoveredPeers
@@ -165,7 +198,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
             .receive(on: DispatchQueue.main)
             .sink { [weak self] peer in
                 guard let self else { return }
-                print("[Flow][Repo] connectedPeer changed (local): \(peer?.deviceName ?? "nil")")
+                flowLog("[Flow][Repo] connectedPeer changed (local): \(peer?.deviceName ?? "nil")")
                 if let peer {
                     guard self.connectedPeer?.transport != .remote else { return }
                     self.connectedPeer = peer
@@ -174,6 +207,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
                     self.connectedPeer = nil
                     self.remote.resumeAutoConnect()
                 }
+                self.recomputeState()
             }
             .store(in: &cancellables)
 
@@ -205,10 +239,10 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
 
     func send(_ message: FlowMessage) {
         if connectedPeer?.transport == .local {
-            print("[Flow][Repo] send: routing over local, message=\(message)")
+            flowLog("[Flow][Repo] send: routing over local, message=\(message.logLabel)")
             local.send(message)
         } else {
-            print("[Flow][Repo] send: routing over remote, message=\(message)")
+            flowLog("[Flow][Repo] send: routing over remote, message=\(message.logLabel)")
             remote.send(message)
         }
     }
@@ -219,15 +253,15 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
     private func triggerRemoteAutoConnect(immediate: Bool) {
         remoteKickoffWork?.cancel()
         guard !immediate else {
-            print("[Flow][Repo] triggerRemoteAutoConnect: not on Wi-Fi, starting remote immediately")
+            flowLog("[Flow][Repo] triggerRemoteAutoConnect: not on Wi-Fi, starting remote immediately")
             remote.startAutoConnect()
             return
         }
-        print("[Flow][Repo] triggerRemoteAutoConnect: on Wi-Fi, giving local a \(localFirstGraceSeconds)s head start before starting remote")
+        flowLog("[Flow][Repo] triggerRemoteAutoConnect: on Wi-Fi, giving local a \(localFirstGraceSeconds)s head start before starting remote")
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             guard self.connectedPeer?.transport != .local else {
-                print("[Flow][Repo] triggerRemoteAutoConnect: local already connected during grace period, skipping remote start")
+                flowLog("[Flow][Repo] triggerRemoteAutoConnect: local already connected during grace period, skipping remote start")
                 return
             }
             self.remote.startAutoConnect()
@@ -237,7 +271,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
     }
 
     func startAutoConnect() {
-        print("[Flow][Repo] startAutoConnect isOnWiFi=\(isOnWiFi)")
+        flowLog("[Flow][Repo] startAutoConnect isOnWiFi=\(isOnWiFi)")
         if isOnWiFi, connectedPeer?.transport != .remote {
             local.startAutoConnect()
             triggerRemoteAutoConnect(immediate: false)
@@ -255,7 +289,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             guard self.connectedPeer?.transport != .local else {
-                print("[Flow][Repo] triggerRemoteForeground: local already connected during grace period, skipping remote foreground kick")
+                flowLog("[Flow][Repo] triggerRemoteForeground: local already connected during grace period, skipping remote foreground kick")
                 return
             }
             self.remote.handleAppForeground()
@@ -265,7 +299,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
     }
 
     func handleAppForeground() {
-        print("[Flow][Repo] handleAppForeground isOnWiFi=\(isOnWiFi)")
+        flowLog("[Flow][Repo] handleAppForeground isOnWiFi=\(isOnWiFi)")
         if isOnWiFi, connectedPeer?.transport != .remote {
             local.handleAppForeground()
             triggerRemoteForeground(immediate: false)
@@ -275,7 +309,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
     }
 
     func redeem(code: String) {
-        print("[Flow][Repo] redeem: code=\(code)")
+        flowLog("[Flow][Repo] redeem requested")
         remote.redeem(code: code)
     }
 
@@ -292,7 +326,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
     }
 
     func disconnect() {
-        print("[Flow][Repo] disconnect")
+        flowLog("[Flow][Repo] disconnect")
         remote.disconnect()
         local.disconnect()
     }
