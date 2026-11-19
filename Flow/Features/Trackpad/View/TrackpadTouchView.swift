@@ -36,16 +36,18 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
     var onTap: (() -> Void)?
 
     private let haptics = TrackpadHaptics()
-    private var cm: ConnectionManager { .shared }
+    /// Goes through the repository so the trackpad works over Wi-Fi *and* remotely.
+    private var cm: FlowConnectionRepository { .shared }
 
-    private let settleWindow:       TimeInterval = 0.05
+    private let settleWindow:       TimeInterval = 0.035
     private let tapSlop:            CGFloat      = 14
     private let tapMaxDuration:     TimeInterval = 0.45
     private let longPressDelay:     TimeInterval = 0.40
     private let scrollStart:        CGFloat      = 2.0
     private let pinchStart:         CGFloat      = 9.0
     private let pinchDominance:     CGFloat      = 0.9
-    private let swipeTrigger:       CGFloat      = 22
+    private let swipeTrigger:       CGFloat      = 30
+    private let swipeDominance:     CGFloat      = 1.25
     private let multiTapCooldown:   TimeInterval = 0.65
     private let rightClickMinDur:   TimeInterval = 0.05
 
@@ -85,6 +87,10 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
 
     private var dragging  = false
     private var threeDrag = false
+
+    /// Settings -> "4-finger gestures". Off (default): 3 fingers navigate like a MacBook with
+    /// 3-finger swipes and only hold-and-drag selects. On: 3 fingers drag/select, 4 fingers navigate.
+    private var fourFingerMode: Bool { UserDefaults.standard.bool(forKey: "flow.fourFingerGestures") }
 
     private var multiAccum = CGPoint.zero
     private var swipeDone      = false
@@ -128,21 +134,13 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        var v: UIView? = superview
-        while let cur = v {
-            cur.gestureRecognizers?.forEach { $0.cancelsTouchesInView = false; $0.delaysTouchesBegan = false }
-            v = cur.superview
-        }
-    }
-
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRequireFailureOf o: UIGestureRecognizer) -> Bool { false }
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy o: UIGestureRecognizer) -> Bool { false }
     override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool { true }
 
     override func touchesBegan(_ ts: Set<UITouch>, with event: UIEvent?) {
+        stopMomentum()
         reconcile(event)
         guard cm.state == .connected else { return }
 
@@ -176,7 +174,13 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
         case .twoFinger:   handleTwoFingerMove(ts, event)
         case .multiFinger: handleMultiFingerMove(ts, event)
         case .settling:
-            if peakFingers >= 2 && maxMove > scrollStart * 1.5 {
+            if peakFingers == 1 && maxMove > 1.0 {
+                // A single finger that is clearly moving must not wait for the settle timer:
+                // that wait was the small "lag" at the start of every cursor movement.
+                settleTimer?.invalidate()
+                commitPhase()
+                handleOneFingerMove(ts, event)
+            } else if peakFingers >= 2 && maxMove > scrollStart * 1.5 {
                 settleTimer?.invalidate()
                 commitPhase()
                 switch phase {
@@ -355,8 +359,8 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
                 haptics.swipe()
                 cm.send(.swipe(direction: dir, fingers: 2))
             } else if cdx != 0 || cdy != 0 {
-                scrollVelX = scrollVelX * 0.6 + cdx * 0.4
-                scrollVelY = scrollVelY * 0.6 + cdy * 0.4
+                scrollVelX = scrollVelX * 0.35 + cdx * 0.65
+                scrollVelY = scrollVelY * 0.35 + cdy * 0.65
                 cm.sendUnreliable(.scroll(dx: Float(scrollVelX * speedMultiplier), dy: Float(scrollVelY * speedMultiplier)))
             }
         case .swipe:
@@ -374,7 +378,7 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
         multiAccum = .zero; swipeDone = false; threeDrag = false
         for (k, r) in map { lastReported[k] = r.current }
 
-        if peakFingers == 3 {
+        if peakFingers == 3 && fourFingerMode {
             threeDrag = true
             haptics.drag()
             cm.send(.threeFingerDragBegin)
@@ -399,7 +403,7 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
         let avgDx = dx / mc; let avgDy = dy / mc
         multiAccum.x += avgDx; multiAccum.y += avgDy
 
-        if peakFingers == 3 {
+        if peakFingers == 3 && fourFingerMode {
             if threeDrag, avgDx != 0 || avgDy != 0 {
                 let (ax, ay) = accel(avgDx, avgDy)
                 cm.sendUnreliable(.threeFingerDragMove(dx: Float(ax), dy: Float(ay)))
@@ -407,9 +411,11 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
             return
         }
 
-        if !swipeDone && (abs(multiAccum.x) >= swipeTrigger || abs(multiAccum.y) >= swipeTrigger) {
+        let ax = abs(multiAccum.x), ay = abs(multiAccum.y)
+        // Fire once the travel is clear and mostly along one axis (a sloppy diagonal waits a bit longer).
+        if !swipeDone && max(ax, ay) >= swipeTrigger && (max(ax, ay) >= min(ax, ay) * swipeDominance) {
             swipeDone = true
-            let dir: SwipeDirection = abs(multiAccum.x) >= abs(multiAccum.y)
+            let dir: SwipeDirection = ax >= ay
                 ? (multiAccum.x > 0 ? .right : .left)
                 : (multiAccum.y > 0 ? .down  : .up)
             haptics.swipe()
@@ -424,7 +430,14 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
 
         if dragging  { dragging = false;  cm.send(.clickDragEnd) }
         if threeDrag { threeDrag = false; cm.send(.threeFingerDragEnd) }
-        if scrollOn  { scrollOn = false;  cm.sendUnreliable(.scrollEnded) }
+        if scrollOn  {
+            scrollOn = false
+            if hypot(scrollVelX, scrollVelY) > 2.5 {
+                startMomentum(vx: scrollVelX, vy: scrollVelY)   // keeps gliding like a real trackpad
+            } else {
+                cm.sendUnreliable(.scrollEnded)
+            }
+        }
         if pinchOn   { pinchOn  = false;  cm.sendUnreliable(.magnifyEnded) }
 
         let duration = gestureStart.map { Date().timeIntervalSince($0) } ?? 1
@@ -465,6 +478,55 @@ final class TrackpadTouchView: UIView, UIGestureRecognizerDelegate {
         if threeDrag { threeDrag = false; cm.send(.threeFingerDragEnd) }
         if scrollOn  { scrollOn = false;  cm.sendUnreliable(.scrollEnded) }
         if pinchOn   { pinchOn  = false;  cm.sendUnreliable(.magnifyEnded) }
+    }
+
+    // MARK: - Scroll momentum
+
+    private var momentumLink: CADisplayLink?
+    private var momentumVel = CGPoint.zero
+    private var momentumLast: CFTimeInterval = 0
+
+    private func startMomentum(vx: CGFloat, vy: CGFloat) {
+        stopMomentum(sendEnd: false)
+        momentumVel = CGPoint(x: vx, y: vy)
+        momentumLast = CACurrentMediaTime()
+        let link = CADisplayLink(target: self, selector: #selector(momentumTick))
+        link.add(to: .main, forMode: .common)
+        momentumLink = link
+    }
+
+    @objc private func momentumTick() {
+        let now = CACurrentMediaTime()
+        let dt = min(0.05, now - momentumLast)
+        momentumLast = now
+        // Friction tuned to ~0.95 per 60 Hz frame, independent of the actual frame rate.
+        let decay = CGFloat(pow(0.95, dt * 60))
+        momentumVel.x *= decay
+        momentumVel.y *= decay
+        if hypot(momentumVel.x, momentumVel.y) < 0.35 {
+            stopMomentum()
+            return
+        }
+        let scale = CGFloat(dt * 60)
+        cm.sendUnreliable(.scroll(dx: Float(momentumVel.x * scale * speedMultiplier),
+                                  dy: Float(momentumVel.y * scale * speedMultiplier)))
+    }
+
+    private func stopMomentum(sendEnd: Bool = true) {
+        guard let link = momentumLink else { return }
+        link.invalidate()
+        momentumLink = nil
+        if sendEnd { cm.sendUnreliable(.scrollEnded) }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { stopMomentum() }
+        var v: UIView? = superview
+        while let cur = v {
+            cur.gestureRecognizers?.forEach { $0.cancelsTouchesInView = false; $0.delaysTouchesBegan = false }
+            v = cur.superview
+        }
     }
 
     private func fullReset() {

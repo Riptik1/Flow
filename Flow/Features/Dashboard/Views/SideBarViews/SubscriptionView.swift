@@ -13,6 +13,7 @@ struct SubscriptionView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var appear = false
+    @ObservedObject private var access = PremiumAccessManager.shared
     @State private var selection: Int
 
     init(factory: FlowViewModelFactory = ViewModelFactory.shared) {
@@ -72,6 +73,7 @@ struct SubscriptionView: View {
             Text(vm.message ?? "")
         }
         .onAppear {
+            vm.refresh()
             withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) {
                 appear = true
             }
@@ -102,6 +104,12 @@ struct SubscriptionView: View {
         VStack(spacing: 8) {
             if let renewal = vm.renewalText {
                 Text(renewal)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else if !access.isSubscribed {
+                Text(access.isTrialActive
+                     ? "Free access ends in \(access.trialDaysRemaining) day\(access.trialDaysRemaining == 1 ? "" : "s")"
+                     : "Your free access has ended")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
             }

@@ -114,7 +114,13 @@ final class KeyboardViewModel: ObservableObject {
         }
     }
 
+    /// iPhone: the keyboard only makes sense sideways, so lock to landscape (left or right).
+    /// iPad: portrait and landscape are both fine – the layout adapts to either.
     func forceLandscape() {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            unlockOrientation()
+            return
+        }
         AppDelegate.orientationLock = .landscape
         if #available(iOS 16.0, *) {
             guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
@@ -148,6 +154,8 @@ final class KeyboardViewModel: ObservableObject {
             withAnimation { browserTabs = tabs }
         case .touchBarXcodeFiles(let files):
             withAnimation { xcodeFiles = files }
+        case .touchBarFavicon(let host, let png):
+            FaviconStore.shared.set(host: host, png: png)
         case .muteStateChanged(let muted):
             isMuted = muted
         default:

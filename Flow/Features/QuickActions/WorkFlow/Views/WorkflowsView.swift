@@ -16,6 +16,9 @@ struct WorkflowsView: View {
     @State private var workflowToDelete: AppWorkflow? = nil
     @State private var showDeleteAlert     = false
     @State private var backTapWorkflow: AppWorkflow?  = nil
+    @ObservedObject private var access = PremiumAccessManager.shared
+    @State private var showPremiumAlert = false
+    @State private var showSubscription = false
 
     @Environment(\.colorScheme) private var scheme
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
@@ -26,15 +29,23 @@ struct WorkflowsView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color(uiColor: .systemBackground).ignoresSafeArea()
-            if vm.workflows.isEmpty { emptyState } else { workflowList }
+        CardOverlay(state: access.overlayState, cornerRadius: 0, onAction: { showPremiumAlert = true }) {
+            ZStack {
+                Color(uiColor: .systemBackground).ignoresSafeArea()
+                if vm.workflows.isEmpty { emptyState } else { workflowList }
+            }
         }
+        .premiumExpiredAlert(isPresented: $showPremiumAlert, feature: "Workflows") { showSubscription = true }
+        .sheet(isPresented: $showSubscription) {
+            NavigationStack { SubscriptionView(factory: factory) }
+        }
+        .onAppear { if !access.hasPremiumAccess { showPremiumAlert = true } }
         .navigationTitle("Workflows")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
+                    guard access.hasPremiumAccess else { showPremiumAlert = true; return }
                     editingWorkflow = nil
                     showPicker = true
                 } label: {

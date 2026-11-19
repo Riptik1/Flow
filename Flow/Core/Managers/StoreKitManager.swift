@@ -175,9 +175,10 @@ final class StoreKitManager: ObservableObject {
             renews = info.willAutoRenew
         }
 
-        activeTier = bestTier
-        expirationDate = bestExpiry
-        willAutoRenew = renews
+        // Only publish real changes – an unconditional write re-renders every observer.
+        if activeTier != bestTier { activeTier = bestTier }
+        if expirationDate != bestExpiry { expirationDate = bestExpiry }
+        if willAutoRenew != renews { willAutoRenew = renews }
 
         let defaults = UserDefaults.standard
         defaults.set(bestTier, forKey: Self.tierKey)

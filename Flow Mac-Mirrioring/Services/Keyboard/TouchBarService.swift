@@ -8,6 +8,7 @@
 #if canImport(AppKit)
 import AppKit
 import CoreGraphics
+import CoreAudio
 
 private let NX_KEYTYPE_SOUND_UP: Int32 = 0
 private let NX_KEYTYPE_SOUND_DOWN: Int32 = 1
@@ -67,7 +68,10 @@ final class TouchBarService {
         xcodeTimer = xt
     }
 
+    private var phoneConnected: Bool { FlowConnectionRepository.shared.state == .connected }
+
     private func pollAppState() {
+        guard phoneConnected else { lastBundleID = ""; return }
         guard let front = NSWorkspace.shared.frontmostApplication else { return }
         let bundleID = front.bundleIdentifier ?? ""
         let appName  = front.localizedName ?? ""
@@ -75,27 +79,28 @@ final class TouchBarService {
             lastBundleID = bundleID
             lastTabHash  = 0
             lastXcodeHash = 0
-            RemoteConnectionManager.shared.send(.touchBarAppState(bundleID: bundleID, appName: appName))
+            FlowConnectionRepository.shared.send(.touchBarAppState(bundleID: bundleID, appName: appName))
         }
     }
 
     private func pollBrowserTabs() {
-        guard isBrowserBundle(lastBundleID) else { return }
+        guard phoneConnected, isBrowserBundle(lastBundleID) else { return }
         let bundleID = lastBundleID
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self else { return }
             let tabs = self.fetchTabs(bundleID: bundleID)
-            let hash = tabs.map { $0.url + "|" + $0.title }.joined().hashValue
+            self.syncFavicons(for: tabs)
+            let hash = tabs.map { $0.url + "|" + $0.title + "|" + ($0.isActive ? "1" : "0") }.joined().hashValue
             guard hash != self.lastTabHash else { return }
             self.lastTabHash = hash
             Task { @MainActor in
-                RemoteConnectionManager.shared.send(.touchBarBrowserTabs(tabs: tabs))
+                FlowConnectionRepository.shared.send(.touchBarBrowserTabs(tabs: tabs))
             }
         }
     }
 
     private func pollXcodeFiles() {
-        guard lastBundleID == "com.apple.dt.Xcode" else { return }
+        guard phoneConnected, lastBundleID == "com.apple.dt.Xcode" else { return }
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self else { return }
             let files = self.fetchXcodeOpenFiles()
@@ -103,7 +108,7 @@ final class TouchBarService {
             guard hash != self.lastXcodeHash else { return }
             self.lastXcodeHash = hash
             Task { @MainActor in
-                RemoteConnectionManager.shared.send(.touchBarXcodeFiles(files: files))
+                FlowConnectionRepository.shared.send(.touchBarXcodeFiles(files: files))
             }
         }
     }
@@ -288,18 +293,8 @@ final class TouchBarService {
             end tell
             """
         }
-        var errorDict: NSDictionary?
-        var result: NSAppleEventDescriptor = NSAppleEventDescriptor()
-        if Thread.isMainThread {
-            guard let appleScript = NSAppleScript(source: script) else { return [] }
-            result = appleScript.executeAndReturnError(&errorDict)
-        } else {
-            DispatchQueue.main.sync {
-                guard let appleScript = NSAppleScript(source: script) else { return }
-                result = appleScript.executeAndReturnError(&errorDict)
-            }
-        }
-        guard errorDict == nil else { return [] }
+        let appLabel = isSafari ? "Safari" : chromiumAppName(for: bundleID)
+        guard let result = executeAppleScript(script, appName: appLabel) else { return [] }
         var tabs: [TouchBarTab] = []
         let count = result.numberOfItems
         guard count > 0 else { return [] }
@@ -364,18 +359,7 @@ final class TouchBarService {
             return docs
         end tell
         """
-        var errorDict: NSDictionary?
-        var result = NSAppleEventDescriptor()
-        if Thread.isMainThread {
-            guard let s = NSAppleScript(source: script) else { return [] }
-            result = s.executeAndReturnError(&errorDict)
-        } else {
-            DispatchQueue.main.sync {
-                guard let s = NSAppleScript(source: script) else { return }
-                result = s.executeAndReturnError(&errorDict)
-            }
-        }
-        guard errorDict == nil, result.numberOfItems > 0 else { return [] }
+        guard let result = executeAppleScript(script, appName: "Xcode"), result.numberOfItems > 0 else { return [] }
         var files: [XcodeRecentFile] = []
         for i in 1...result.numberOfItems {
             guard let item = result.atIndex(i) else { continue }
@@ -406,12 +390,14 @@ final class TouchBarService {
                 self.lastBundleID  = bundleID
                 self.lastTabHash   = 0
                 self.lastXcodeHash = 0
+                self.resetFaviconsSent()
                 reply(.touchBarAppState(bundleID: bundleID, appName: appName))
                 if self.isBrowserBundle(bundleID) {
                     DispatchQueue.global(qos: .userInitiated).async {
                         let tabs = self.fetchTabs(bundleID: bundleID)
-                        self.lastTabHash = tabs.map { $0.url + "|" + $0.title }.joined().hashValue
+                        self.lastTabHash = tabs.map { $0.url + "|" + $0.title + "|" + ($0.isActive ? "1" : "0") }.joined().hashValue
                         reply(.touchBarBrowserTabs(tabs: tabs))
+                        self.syncFavicons(for: tabs)
                     }
                 }
                 if bundleID == "com.apple.dt.Xcode" {
@@ -423,9 +409,11 @@ final class TouchBarService {
                 }
             }
         case .touchBarAction(let kind):
-            perform(kind)
-        case .muteAudio, .unmuteAudio:
-            postSystemDefinedKey(NX_KEYTYPE_MUTE)
+            perform(kind, reply: reply)
+        case .muteAudio:
+            setMuted(true, reply: reply)
+        case .unmuteAudio:
+            setMuted(false, reply: reply)
         case .typeText(let text):
             setClipboard(text)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -451,15 +439,15 @@ final class TouchBarService {
         }
     }
 
-    private func perform(_ kind: TouchBarActionKind) {
+    private func perform(_ kind: TouchBarActionKind, reply: @escaping (FlowMessage) -> Void) {
         switch kind {
-        case .brightnessUp:   keyTapWithFlags(120, flags: .maskSecondaryFn)
-        case .brightnessDown: keyTapWithFlags(122, flags: .maskSecondaryFn)
+        case .brightnessUp:   adjustBrightness(steps: 1)
+        case .brightnessDown: adjustBrightness(steps: -1)
         case .keyboardBrightnessUp:   postSystemDefinedKey(NX_KEYTYPE_ILLUMINATION_UP)
         case .keyboardBrightnessDown: postSystemDefinedKey(NX_KEYTYPE_ILLUMINATION_DOWN)
-        case .volumeUp:       adjustVolume(by: 6)
-        case .volumeDown:     adjustVolume(by: -6)
-        case .mute:           toggleMute()
+        case .volumeUp:       adjustVolume(steps: 1, reply: reply)
+        case .volumeDown:     adjustVolume(steps: -1, reply: reply)
+        case .mute:           setMuted(!isMuted(), reply: reply)
         case .mediaPlay:      postSystemDefinedKey(NX_KEYTYPE_PLAY)
         case .mediaPrev:      postSystemDefinedKey(NX_KEYTYPE_PREVIOUS)
         case .mediaNext:      postSystemDefinedKey(NX_KEYTYPE_NEXT)
@@ -498,29 +486,48 @@ final class TouchBarService {
 
     private func triggerMissionControl() {
         DispatchQueue.main.async {
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.exposelauncher") {
-                NSWorkspace.shared.open(url)
-            } else {
-                self.keyTapWithFlags(99, flags: .maskSecondaryFn)
-            }
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Mission Control.app"))
         }
     }
 
     private func triggerAppWindows() {
-        keyTapWithFlags(109, flags: .maskSecondaryFn)
+        keyTapWithFlags(125, flags: [.maskControl, .maskSecondaryFn])
+    }
+
+    /// AppleScript runs on its own serial queue: a pending macOS "Allow Flow to control Safari?"
+    /// prompt (or a slow app) must never freeze the Mac app's UI or the other Touch Bar actions.
+    private let scriptQueue = DispatchQueue(label: "com.flow.touchbar.applescript", qos: .userInitiated)
+
+    private func executeAppleScript(_ source: String, appName: String? = nil) -> NSAppleEventDescriptor? {
+        var result: NSAppleEventDescriptor?
+        var errorNumber: Int?
+        scriptQueue.sync {
+            var err: NSDictionary?
+            let r = NSAppleScript(source: source)?.executeAndReturnError(&err)
+            if let err {
+                errorNumber = err[NSAppleScript.errorNumber] as? Int
+            } else {
+                result = r
+            }
+        }
+        if errorNumber == -1743, let appName {
+            // "Not authorized to send Apple events" – the user said no to the Automation prompt.
+            MacPermissionManager.shared.warnAutomationDenied(appName: appName)
+        }
+        return result
     }
 
     private func runScript(_ source: String) {
-        let block = {
+        scriptQueue.async {
             var err: NSDictionary?
             NSAppleScript(source: source)?.executeAndReturnError(&err)
         }
-        if Thread.isMainThread { block() } else { DispatchQueue.main.sync { block() } }
     }
 
     private func openLaunchpad() {
         DispatchQueue.main.async {
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.launchpad.launcher")
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.apps.launcher")
+                ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.launchpad.launcher")
                 ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.launchpad") {
                 let config = NSWorkspace.OpenConfiguration()
                 NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in }
@@ -551,21 +558,199 @@ final class TouchBarService {
         }
     }
 
-    private func adjustVolume(by delta: Int) {
+    // MARK: - Volume, mute, brightness (no Accessibility needed)
+
+    private func outputDevice() -> AudioDeviceID {
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id)
+        return id
+    }
+
+    private func outputAddress(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioDevicePropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
+    }
+
+    /// 'vmvc' = virtual main volume: the same value the menu-bar slider changes.
+    private let virtualMainVolume: AudioObjectPropertySelector = 0x766D7663
+
+    private func currentVolume() -> Float? {
+        let device = outputDevice()
+        var address = outputAddress(virtualMainVolume)
+        guard AudioObjectHasProperty(device, &address) else { return nil }
+        var value = Float32(0)
+        var size = UInt32(MemoryLayout<Float32>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else { return nil }
+        return value
+    }
+
+    private func writeVolume(_ value: Float) -> Bool {
+        let device = outputDevice()
+        var address = outputAddress(virtualMainVolume)
+        guard AudioObjectHasProperty(device, &address) else { return false }
+        var v = Float32(min(1, max(0, value)))
+        return AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<Float32>.size), &v) == noErr
+    }
+
+    private func adjustVolume(steps: Int, reply: @escaping (FlowMessage) -> Void) {
+        if let current = currentVolume() {
+            let next = current + Float(steps) / 16.0
+            if writeVolume(next) {
+                if steps > 0, isMuted() { setMuted(false, reply: reply) }
+                return
+            }
+        }
+        // Devices without a software volume (some HDMI/USB outputs): ask AppleScript.
         runScript("""
         set c to output volume of (get volume settings)
-        set n to c + (\(delta))
+        set n to c + (\(steps * 6))
         if n > 100 then set n to 100
         if n < 0 then set n to 0
         set volume output volume n
         """)
     }
 
-    private func toggleMute() {
-        runScript("""
-        set m to output muted of (get volume settings)
-        set volume output muted (not m)
-        """)
+    private func isMuted() -> Bool {
+        let device = outputDevice()
+        var address = outputAddress(kAudioDevicePropertyMute)
+        guard AudioObjectHasProperty(device, &address) else { return false }
+        var value = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else { return false }
+        return value != 0
+    }
+
+    private func setMuted(_ muted: Bool, reply: @escaping (FlowMessage) -> Void) {
+        let device = outputDevice()
+        var address = outputAddress(kAudioDevicePropertyMute)
+        var done = false
+        if AudioObjectHasProperty(device, &address) {
+            var v = UInt32(muted ? 1 : 0)
+            done = AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v) == noErr
+        }
+        if !done {
+            runScript("set volume output muted \(muted ? "true" : "false")")
+        }
+        reply(.muteStateChanged(isMuted: muted))
+    }
+
+    private typealias DSGet = @convention(c) (UInt32, UnsafeMutablePointer<Float>) -> Int32
+    private typealias DSSet = @convention(c) (UInt32, Float) -> Int32
+    private lazy var displayServices: (get: DSGet, set: DSSet)? = {
+        guard let h = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY),
+              let g = dlsym(h, "DisplayServicesGetBrightness"),
+              let s = dlsym(h, "DisplayServicesSetBrightness") else { return nil }
+        return (unsafeBitCast(g, to: DSGet.self), unsafeBitCast(s, to: DSSet.self))
+    }()
+
+    /// Built-in display brightness in 16 steps, like the real F1/F2 keys.
+    private func adjustBrightness(steps: Int) {
+        if let api = displayServices {
+            let display = CGMainDisplayID()
+            var current: Float = 0
+            if api.get(display, &current) == 0 {
+                let next = min(1, max(0, current + Float(steps) / 16.0))
+                if api.set(display, next) == 0 { return }
+            }
+        }
+        // External display or unsupported Mac: fall back to the brightness media keys.
+        postSystemDefinedKey(steps > 0 ? NX_KEYTYPE_BRIGHTNESS_UP : NX_KEYTYPE_BRIGHTNESS_DOWN)
+    }
+
+    // MARK: - Browser favicons
+
+    private let faviconLock = NSLock()
+    private var faviconCache: [String: Data] = [:]
+    private var faviconMissing: [String: Date] = [:]
+    private var faviconSent = Set<String>()
+    private var faviconLoading = Set<String>()
+
+    private func resetFaviconsSent() {
+        faviconLock.lock(); faviconSent.removeAll(); faviconLock.unlock()
+    }
+
+    private func host(of urlString: String) -> String? {
+        guard let url = URL(string: urlString), let scheme = url.scheme, scheme.hasPrefix("http"),
+              let host = url.host, host.contains("."), !host.hasSuffix(".local") else { return nil }
+        return host
+    }
+
+    /// Sends each site's icon to the phone once (small PNG), so tab buttons can show the real logo.
+    private func syncFavicons(for tabs: [TouchBarTab]) {
+        for host in Set(tabs.compactMap { host(of: $0.url) }) {
+            faviconLock.lock()
+            if let png = faviconCache[host] {
+                let alreadySent = faviconSent.contains(host)
+                faviconSent.insert(host)
+                faviconLock.unlock()
+                if !alreadySent { sendFavicon(host: host, png: png) }
+                continue
+            }
+            if let missed = faviconMissing[host], Date().timeIntervalSince(missed) < 600 {
+                faviconLock.unlock(); continue
+            }
+            guard !faviconLoading.contains(host) else { faviconLock.unlock(); continue }
+            faviconLoading.insert(host)
+            faviconLock.unlock()
+
+            Task.detached(priority: .utility) { [weak self] in
+                guard let self else { return }
+                let png = await self.downloadFavicon(host: host)
+                self.faviconLock.lock()
+                self.faviconLoading.remove(host)
+                if let png {
+                    self.faviconCache[host] = png
+                    self.faviconSent.insert(host)
+                } else {
+                    self.faviconMissing[host] = Date()
+                }
+                self.faviconLock.unlock()
+                if let png { self.sendFavicon(host: host, png: png) }
+            }
+        }
+    }
+
+    private func sendFavicon(host: String, png: Data) {
+        DispatchQueue.main.async {
+            FlowConnectionRepository.shared.send(.touchBarFavicon(host: host, png: png))
+        }
+    }
+
+    private func downloadFavicon(host: String) async -> Data? {
+        if let direct = URL(string: "https://\(host)/favicon.ico"), let png = await loadIcon(direct) { return png }
+        // No /favicon.ico: read the page's <link rel="icon">.
+        guard let page = URL(string: "https://\(host)/") else { return nil }
+        var request = URLRequest(url: page, timeoutInterval: 4)
+        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        let html = String(decoding: data.prefix(200_000), as: UTF8.self)
+        guard let tag = html.range(of: "<link[^>]+rel=[\"'](?:shortcut )?icon[\"'][^>]*>", options: [.regularExpression, .caseInsensitive]),
+              let hrefRange = String(html[tag]).range(of: "href=[\"']([^\"']+)[\"']", options: [.regularExpression, .caseInsensitive])
+        else { return nil }
+        let hrefAttr = String(String(html[tag])[hrefRange])
+        let href = hrefAttr.dropFirst(5).dropLast()
+        guard let iconURL = URL(string: String(href), relativeTo: page)?.absoluteURL else { return nil }
+        return await loadIcon(iconURL)
+    }
+
+    private func loadIcon(_ url: URL) async -> Data? {
+        var request = URLRequest(url: url, timeoutInterval: 4)
+        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              data.count > 40, data.count < 400_000,
+              let image = NSImage(data: data), image.size.width > 0 else { return nil }
+        let size = NSSize(width: 64, height: 64)
+        let output = NSImage(size: size)
+        output.lockFocus()
+        image.draw(in: NSRect(origin: .zero, size: size), from: .zero, operation: .copy, fraction: 1)
+        output.unlockFocus()
+        guard let tiff = output.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
     }
 
     private func toggleDoNotDisturb() {

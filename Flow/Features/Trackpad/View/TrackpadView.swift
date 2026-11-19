@@ -33,6 +33,7 @@ struct TrackpadView: View {
                     }
                 })
                 .ignoresSafeArea()
+                TrackpadAxisLabels()
                 ZStack {
                     if vm.showBackButton {
                         TrackpadBackButton { dismiss() }

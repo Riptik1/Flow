@@ -32,6 +32,7 @@ final class WorkflowsViewModel: ObservableObject {
     func delete(_ workflow: AppWorkflow) { repository.delete(workflow) }
 
     func launch(_ workflow: AppWorkflow) {
+        guard PremiumAccessManager.shared.hasPremiumAccess else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         for bundleID in workflow.appBundleIDs {
             connectionService.send(.launchApp(bundleID: bundleID))

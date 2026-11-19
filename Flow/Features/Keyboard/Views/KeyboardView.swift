@@ -14,6 +14,7 @@ struct MacKeyboardView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showBack = false
     @State private var showSubscription = false
+    @State private var showPremiumAlert = false
 
     init(factory: FlowViewModelFactory = ViewModelFactory.shared) {
         self.factory = factory
@@ -22,7 +23,11 @@ struct MacKeyboardView: View {
 
     private var isIPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
-    var body: some View {
+    /// iPad "Keyboard + Trackpad" (Settings -> Input Mode): the keyboard sits at the top with a
+    /// slightly lower height, then a divider, then a full multi-touch trackpad.
+    @AppStorage("flow.inputMode") private var inputMode: String = "keyboardTrackpad"
+
+    private var keyboardLayer: some View {
         GeometryReader { geo in
             let isPad: Bool = isIPad
             let hEdge: CGFloat = isPad ? 28.0 : 12.0
@@ -40,7 +45,7 @@ struct MacKeyboardView: View {
             ZStack(alignment: .topLeading) {
                 VStack(spacing: KeyboardLayout.gap) {
                     Spacer(minLength: 0)
-                    CardOverlay(state: access.overlayState, cornerRadius: min(10.0, tbH * 0.36), onAction: { showSubscription = true }) {
+                    CardOverlay(state: access.overlayState, cornerRadius: min(10.0, tbH * 0.36), onAction: { showPremiumAlert = true }) {
                         DynamicTouchBar(
                             tbH: tbH, fnOn: vm.fnOn, isMuted: vm.isMuted,
                             frontApp: vm.frontApp, browserTabs: vm.browserTabs, xcodeFiles: vm.xcodeFiles,
@@ -91,6 +96,49 @@ struct MacKeyboardView: View {
                 .padding(.leading, safeLeft + (isPad ? -14.0 : -92.0))
             }
         }
+    }
+
+    private func padKeyboardHeight(_ size: CGSize, budgetFraction: CGFloat) -> CGFloat {
+        let hEdge: CGFloat = 28.0, vPad: CGFloat = 8.0, tbH: CGFloat = 52.0, tbGap: CGFloat = 13.0
+        let usableW = max(1.0, size.width - hEdge * 2.0)
+        let unitW = max(1.0, (usableW - KeyboardLayout.gap * 18.0) / 15.5)
+        // Same key proportions as before, just a little shorter so the trackpad gets room.
+        let budget = size.height * budgetFraction
+        let keyH = max(10.0, min(unitW * 1.25, (budget - vPad * 2.0 - tbH - tbGap - KeyboardLayout.gap * 4.0) / 5.0))
+        return vPad * 2.0 + tbH + tbGap + keyH * 5.0 + KeyboardLayout.gap * 4.0
+    }
+
+    var body: some View {
+        GeometryReader { outer in
+            let showTrackpad = isIPad && inputMode == "keyboardTrackpad"
+            let isPortrait = outer.size.height > outer.size.width
+            // iPad: the keyboard keeps its natural proportions and sits at the top in either
+            // orientation (a shorter one when the trackpad shares the screen). Landscape
+            // without a trackpad keeps the original full-height layout; iPhone is untouched.
+            let keyboardHeight: CGFloat = {
+                if showTrackpad { return padKeyboardHeight(outer.size, budgetFraction: 0.56) }
+                if isIPad && isPortrait { return padKeyboardHeight(outer.size, budgetFraction: 1.0) }
+                return outer.size.height
+            }()
+            VStack(spacing: 0) {
+                keyboardLayer
+                    .frame(height: keyboardHeight)
+
+                if showTrackpad {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.09))
+                        .frame(height: 1)
+                        .padding(.horizontal, 28)
+
+                    ZStack {
+                        TrackpadArea(onTap: {})
+                        TrackpadAxisLabels()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(width: outer.size.width, height: outer.size.height, alignment: .top)
+        }
         .background(Color(.systemBackground).ignoresSafeArea())
         .contentShape(Rectangle())
         .onTapGesture {
@@ -105,11 +153,12 @@ struct MacKeyboardView: View {
             vm.unlockOrientation()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            if UIDevice.current.orientation.isPortrait { vm.forceLandscape() }
+            if !isIPad, UIDevice.current.orientation.isPortrait { vm.forceLandscape() }
         }
         .sheet(isPresented: $showSubscription) {
             NavigationStack { SubscriptionView(factory: factory) }
         }
+        .premiumExpiredAlert(isPresented: $showPremiumAlert, feature: "the Touch Bar") { showSubscription = true }
     }
 }
 

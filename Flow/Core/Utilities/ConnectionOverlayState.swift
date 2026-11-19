@@ -122,7 +122,7 @@ struct CardOverlay<Content: View>: View {
                 HStack(spacing: 7) {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 12, weight: .semibold))
-                    Text("Premium access expired")
+                    Text("Free access ended")
                         .font(.system(size: 13, weight: .semibold))
                 }
                 .foregroundStyle(.white)

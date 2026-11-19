@@ -73,7 +73,9 @@ enum PlanTier: Int, CaseIterable {
             "Remotely use Mac apps on your device",
             "Remote file access",
             "Full terminal access",
-            "Touch Bar in your keyboard"
+            "Touch Bar in your keyboard",
+            "Workflows and back-tap shortcuts",
+            "Search your Mac from your iPhone"
         ]
     }
 }

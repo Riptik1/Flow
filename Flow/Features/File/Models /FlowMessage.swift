@@ -164,6 +164,7 @@ enum FlowMessage: Codable {
     case touchBarBrowserTabs(tabs: [TouchBarTab])
     case touchBarXcodeFiles(files: [XcodeRecentFile])
     case touchBarAction(kind: TouchBarActionKind)
+    case touchBarFavicon(host: String, png: Data)
     case requestAppList
     case appList(apps: [MacApp])
     case appIconChunk(icons: [MacAppIcon])

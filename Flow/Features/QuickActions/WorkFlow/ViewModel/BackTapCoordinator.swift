@@ -75,6 +75,7 @@ final class BackTapCoordinator: ObservableObject {
     }
 
     private func launchWorkflow(_ wf: AppWorkflow) {
+        guard PremiumAccessManager.shared.hasPremiumAccess else { return }
         UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
         lastTriggeredWorkflow = wf
         for bundleID in wf.appBundleIDs {

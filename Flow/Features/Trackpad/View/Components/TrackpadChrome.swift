@@ -18,6 +18,27 @@ struct TrackpadCornerHintDot: View {
     }
 }
 
+/// Faint UP / DOWN markers so the orientation of the pad is obvious. iPad only.
+struct TrackpadAxisLabels: View {
+    @Environment(\.colorScheme) private var cs
+
+    var body: some View {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            VStack {
+                Text("UP")
+                Spacer()
+                Text("DOWN")
+            }
+            .font(.system(size: 10, weight: .medium, design: .rounded))
+            .tracking(2.5)
+            .foregroundStyle(Color.gray.opacity(cs == .dark ? 0.38 : 0.42))
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+        }
+    }
+}
+
 struct TrackpadBackButton: View {
     let action: () -> Void
     @Environment(\.colorScheme) private var cs

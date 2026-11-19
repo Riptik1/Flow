@@ -20,7 +20,14 @@ final class SubscriptionViewModel: ObservableObject {
     init() {
         cancellable = store.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
-        Task { await store.loadProducts(); await store.refreshEntitlements() }
+    }
+
+    /// Called once when the screen appears (not from init: SwiftUI can create view models repeatedly).
+    func refresh() {
+        Task {
+            await store.loadProducts()
+            await store.refreshEntitlements()
+        }
     }
 
     var subTier: String { store.activeTier }

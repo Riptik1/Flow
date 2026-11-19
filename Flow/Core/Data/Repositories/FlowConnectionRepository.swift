@@ -247,6 +247,16 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
         }
     }
 
+    /// Fire-and-forget (pointer movement, scrolling). Remote has no unreliable mode; its
+    /// sender batches these.
+    func sendUnreliable(_ message: FlowMessage) {
+        if connectedPeer?.transport == .local {
+            local.sendUnreliable(message)
+        } else {
+            remote.send(message)
+        }
+    }
+
     private let localFirstGraceSeconds: TimeInterval = 3.0
     private var remoteKickoffWork: DispatchWorkItem?
 

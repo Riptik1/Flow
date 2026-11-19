@@ -10,6 +10,7 @@ import SwiftUI
 struct InstructionOverlay: View {
     let onClose: () -> Void
     @Environment(\.colorScheme) private var cs
+    @AppStorage("flow.fourFingerGestures") private var fourFingerGestures = false
     private var isIPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     var body: some View {
         ZStack {
@@ -94,10 +95,17 @@ struct InstructionOverlay: View {
                 GCard(icon: "arrow.left.and.right.righttriangle.left.righttriangle.right",
                       color: .pink,   title: "Pinch & Zoom",
                       badge: "2 Fingers",    desc: "Pinch two fingers to zoom in or out.")
-                GCard(icon: "text.cursor",           color: .green,  title: "Select Text",
-                      badge: "3 Fingers",    desc: "Slowly drag with three fingers to select text.")
-                GCard(icon: "square.3.layers.3d",   color: .indigo, title: "Mission Control",
-                      badge: "4 Fingers",  desc: "Swipe up/down/left/right for spaces and Exposé.")
+                if fourFingerGestures {
+                    GCard(icon: "text.cursor",           color: .green,  title: "Select Text",
+                          badge: "3 Fingers",    desc: "Drag with three fingers to select text.")
+                    GCard(icon: "square.3.layers.3d",   color: .indigo, title: "Switch Spaces",
+                          badge: "4 Fingers",  desc: "Swipe left or right to switch Spaces, up for Mission Control, down for App Exposé.")
+                } else {
+                    GCard(icon: "text.cursor",           color: .green,  title: "Select Text",
+                          badge: "Hold + Drag",  desc: "Hold one finger for a moment, then drag to select.")
+                    GCard(icon: "square.3.layers.3d",   color: .indigo, title: "Switch Spaces",
+                          badge: "3 Fingers",  desc: "Swipe left or right to switch Spaces, up for Mission Control, down for App Exposé.")
+                }
             }
         }
     }
@@ -105,6 +113,9 @@ struct InstructionOverlay: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Tips").font(.system(size: isIPad ? 19 : 16, weight: .semibold, design: .rounded))
             VStack(spacing: 8) {
+                TipRow(icon: "gearshape",                 color: .indigo, text: fourFingerGestures
+                       ? "4-finger gestures are on. Turn them off in Settings to navigate with 3 fingers."
+                       : "Prefer 3 fingers to select and 4 to navigate? Turn on 4-Finger Gestures in Settings.")
                 TipRow(icon: "hand.draw",                  color: .purple, text: "Hold one finger for 0.4s to start drag mode.")
                 TipRow(icon: "waveform.path.ecg",         color: .green,  text: "Haptic feedback confirms every tap.")
                 TipRow(icon: "smallcircle.filled.circle", color: .blue,   text: "Tap the corner dot to reveal the back button.")

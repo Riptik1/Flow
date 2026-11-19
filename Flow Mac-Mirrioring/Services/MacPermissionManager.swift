@@ -196,16 +196,35 @@ final class MacPermissionManager {
              .magnifyBegan, .magnify, .magnifyEnded, .smartZoom, .swipe,
              .clickDragBegin, .clickDragMove, .clickDragEnd,
              .threeFingerDragBegin, .threeFingerDragMove, .threeFingerDragEnd,
-             .keyPress, .typeText, .touchBarAction,
+             .keyPress, .typeText,
              .appMirroringInputTouch, .appMirroringInputClick, .appMirroringInputScroll,
              .appMirroringInputKey, .appMirroringInputRightClick,
              .appMirroringInputDoubleClick, .appMirroringInputText:
             return .input
+        case .touchBarAction(let kind):
+            // Volume, mute and brightness are changed directly and need no permission.
+            switch kind {
+            case .volumeUp, .volumeDown, .mute, .brightnessUp, .brightnessDown, .missionControl, .launchpad:
+                return nil
+            default:
+                return .input
+            }
         case .startAppMirroring:
             return .mirroring
         default:
             return nil
         }
+    }
+
+    /// The user refused "Flow wants to control <browser>" – tabs can't be listed until it is allowed.
+    func warnAutomationDenied(appName: String) {
+        showAlert(
+            key: "automation-\(appName)",
+            minInterval: 600,
+            title: "Allow Flow to control \(appName)",
+            body: "Flow needs it to show your \(appName) tabs on the Touch Bar. Turn on \(appName) under Flow in Automation.",
+            settings: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!
+        )
     }
 
     /// Always runs on the main thread; throttled so a stream of blocked messages

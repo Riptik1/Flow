@@ -14,7 +14,7 @@ struct SettingsView: View {
     @AppStorage("flow.appearance") private var appearance: String = "system"
     @AppStorage("flow.subscriptionTier") private var subTier: String = "none"
     @AppStorage("flow.subscriptionEndDate") private var subEndDate: String = ""
-    @AppStorage("flow.inputMode") private var inputMode: String = "trackpad"
+    @AppStorage("flow.inputMode") private var inputMode: String = "keyboardTrackpad"
     @State private var showSubscriptionDetail = false
     @State private var showSuggest = false
 
@@ -109,6 +109,8 @@ struct SettingsView: View {
                     .textCase(.uppercase)
 
                 TrackpadSpeedControl()
+
+                TrackpadGestureControl()
 
                 if isPad {
                     Divider()

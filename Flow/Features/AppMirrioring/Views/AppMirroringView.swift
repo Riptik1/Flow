@@ -21,6 +21,7 @@ struct AppMirroringView: View {
     @State private var lastAppliedCaptureAspect: CGFloat = 0
     @State private var isZoomLocked = false
     @State private var showSubscription = false
+    @State private var showPremiumAlert = false
 
     private let minZoom: CGFloat = 1.0
     private let maxZoom: CGFloat = 8.0
@@ -35,7 +36,7 @@ struct AppMirroringView: View {
     }
 
     var body: some View {
-        CardOverlay(state: access.overlayState, cornerRadius: 0, onAction: { showSubscription = true }) {
+        CardOverlay(state: access.overlayState, cornerRadius: 0, onAction: { showPremiumAlert = true }) {
             GeometryReader { geo in
                 ZStack {
                     Color.black.ignoresSafeArea()
@@ -165,9 +166,10 @@ struct AppMirroringView: View {
             .ignoresSafeArea()
         }
         .onAppear {
-            guard access.hasPremiumAccess else { return }
+            guard access.hasPremiumAccess else { showPremiumAlert = true; return }
             viewModel.startMirroring(bundleID: bundleID)
         }
+        .premiumExpiredAlert(isPresented: $showPremiumAlert, feature: "App Mirroring") { showSubscription = true }
         .onDisappear { viewModel.stopMirroring() }
         .onChange(of: bundleID) { _, newBundleID in
             zoomScale = 1.0

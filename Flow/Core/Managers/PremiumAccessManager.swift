@@ -11,12 +11,16 @@ import Combine
 final class PremiumAccessManager: ObservableObject {
     static let shared = PremiumAccessManager()
 
-    private let trialDurationSeconds: TimeInterval = 3 * 24 * 60 * 60
+    /// Free access for every premium feature, counted from the first launch.
+    private let trialDurationSeconds: TimeInterval = 2 * 24 * 60 * 60
     private let keychainService = "com.flow.app.trial"
     private let keychainAccount = "trialStartDate"
+    private let lastSeenAccount = "trialLastSeenDate"
     private let subscriptionDefaultsKey = "flow.subscriptionTier"
 
     private let trialStartDate: Date
+    private var lastSeenDate: Date
+    private var lastSeenWrittenAt = Date.distantPast
     private var notificationObserver: NSObjectProtocol?
     private var refreshTimer: Timer?
 
@@ -30,6 +34,8 @@ final class PremiumAccessManager: ObservableObject {
             KeychainStore.writeDate(now, service: keychainService, account: keychainAccount)
             trialStartDate = now
         }
+
+        lastSeenDate = KeychainStore.readDate(service: keychainService, account: lastSeenAccount) ?? Date()
 
         subscriptionTier = UserDefaults.standard.string(forKey: subscriptionDefaultsKey) ?? "none"
 
@@ -64,8 +70,20 @@ final class PremiumAccessManager: ObservableObject {
         subscriptionTier == "weekly" || subscriptionTier == "monthly" || subscriptionTier == "lifetime"
     }
 
+    /// "Now", but never earlier than the latest time the app has seen. Setting the
+    /// phone's clock back therefore cannot give the free access back.
+    private var effectiveNow: Date {
+        let now = Date()
+        if now > lastSeenDate { lastSeenDate = now }
+        if Date().timeIntervalSince(lastSeenWrittenAt) > 60 {
+            lastSeenWrittenAt = Date()
+            KeychainStore.writeDate(lastSeenDate, service: keychainService, account: lastSeenAccount)
+        }
+        return lastSeenDate
+    }
+
     var trialTimeRemaining: TimeInterval {
-        max(0, trialDurationSeconds - Date().timeIntervalSince(trialStartDate))
+        max(0, trialDurationSeconds - effectiveNow.timeIntervalSince(trialStartDate))
     }
 
     var isTrialActive: Bool {

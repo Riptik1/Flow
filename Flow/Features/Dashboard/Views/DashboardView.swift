@@ -37,6 +37,8 @@ struct DashboardView: View {
     @AppStorage("flow.remotePromptSnoozeUntil") private var remotePromptSnoozeUntil: Double = 0
     @ObservedObject private var localNetwork = LocalNetworkPermission.shared
     @ObservedObject private var deviceRepo = DeviceRepository.shared
+    @ObservedObject private var access = PremiumAccessManager.shared
+    @State private var showSearchPremiumAlert = false
     @State private var showRemotePrompt = false
     @State private var remotePromptShownThisSession = false
     @State private var showLocalNetworkDenied = false
@@ -139,6 +141,7 @@ struct DashboardView: View {
         } message: {
             Text("You're connected on Wi-Fi. To also connect from anywhere:\n\n1. On your Mac, click “Generate Pairing Code”.\n2. Tap “Enter Code” and type it.")
         }
+        .premiumExpiredAlert(isPresented: $showSearchPremiumAlert, feature: "Search") { showSubscription = true }
         .alert("Local Network is off", isPresented: $showLocalNetworkDenied) {
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
@@ -219,7 +222,10 @@ struct DashboardView: View {
             onWorkflows: { showWorkflows = true },
             onTerminal:  { showTerminal  = true },
             onClipboard: { showClipboard = true },
-            onSearch:    { withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) { showSpotlight = true } },
+            onSearch:    {
+                guard access.hasPremiumAccess else { showSearchPremiumAlert = true; return }
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) { showSpotlight = true }
+            },
             onMute:      { vm.toggleMute() },
             onLock:      { vm.lockMac() },
             onShutDown:  { vm.shutDownMac() },

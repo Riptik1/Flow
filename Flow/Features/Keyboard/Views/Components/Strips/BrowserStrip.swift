@@ -94,11 +94,15 @@ struct BrowserTabBtn: View {
     let dark: Bool
     let onTap: () -> Void
 
+    @ObservedObject private var favicons = FaviconStore.shared
+    private var icon: UIImage? { favicons.image(forURL: tab.url) }
+
     private var shortTitle: String {
         let t = tab.title
-        if t.isEmpty || t == "New Tab" { return "\(number)" }
+        if t.isEmpty || t == "New Tab" { return icon == nil ? "\(number)" : "New Tab" }
         let trimmed = t.count > 12 ? String(t.prefix(11)) + "…" : t
-        return "\(number) \(trimmed)"
+        // With a site logo the logo replaces the number, like the real Touch Bar.
+        return icon == nil ? "\(number) \(trimmed)" : trimmed
     }
 
     private var fgColor: Color {
@@ -118,10 +122,19 @@ struct BrowserTabBtn: View {
 
     var body: some View {
         Button(action: onTap) {
-            Text(shortTitle)
-                .font(.system(size: max(9.0, btnH * 0.34), weight: tab.isActive ? .bold : .medium, design: .rounded))
-                .foregroundStyle(fgColor)
-                .lineLimit(1)
+            HStack(spacing: 4.0) {
+                if let icon {
+                    Image(uiImage: icon)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: btnH * 0.46, height: btnH * 0.46)
+                        .clipShape(RoundedRectangle(cornerRadius: 3.0, style: .continuous))
+                }
+                Text(shortTitle)
+                    .font(.system(size: max(9.0, btnH * 0.34), weight: tab.isActive ? .bold : .medium, design: .rounded))
+                    .foregroundStyle(fgColor)
+                    .lineLimit(1)
+            }
                 .padding(.horizontal, 5.0)
                 .frame(height: btnH)
                 .background(

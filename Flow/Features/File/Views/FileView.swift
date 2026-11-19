@@ -13,6 +13,7 @@ struct FileView: View {
     @ObservedObject private var access = PremiumAccessManager.shared
     @State private var showPermissions = false
     @State private var showSubscription = false
+    @State private var showPremiumAlert = false
     @State private var hasInitialized = false
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -22,7 +23,7 @@ struct FileView: View {
     }
 
     var body: some View {
-        CardOverlay(state: access.overlayState, cornerRadius: 0, onAction: { showSubscription = true }) {
+        CardOverlay(state: access.overlayState, cornerRadius: 0, onAction: { showPremiumAlert = true }) {
             Group {
                 if sizeClass == .regular { iPadLayout }
                 else { iPhoneLayout }
@@ -34,10 +35,11 @@ struct FileView: View {
         .sheet(isPresented: $showSubscription) {
             NavigationStack { SubscriptionView(factory: factory) }
         }
+        .premiumExpiredAlert(isPresented: $showPremiumAlert, feature: "Remote Files") { showSubscription = true }
         .onAppear {
             guard !hasInitialized else { return }
             hasInitialized = true
-            guard access.hasPremiumAccess else { return }
+            guard access.hasPremiumAccess else { showPremiumAlert = true; return }
             store.checkPermissions()
         }
         .onChange(of: store.permissionGranted) { _, granted in

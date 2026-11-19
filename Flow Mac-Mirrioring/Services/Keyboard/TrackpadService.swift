@@ -22,41 +22,19 @@ final class TrackpadService {
     private var magActive        = false
     private var dragActive       = false
     private var lastSwipeAt      : Date?
-    private var lastSwitchedIDs  : [String: UInt64] = [:]
     private var dragResumeTimer  : DispatchWorkItem?
     private let dragResumeWindow : TimeInterval = 1.0
 
     private let scrollSpeedV  : CGFloat      = 2.2
     private let scrollSpeedH  : CGFloat      = 2.2
     private let magnifyGain   : CGFloat      = 2.4
-    private let swipeCooldown : TimeInterval = 0.45
+    private let swipeCooldown : TimeInterval = 0.32
 
     private let fContinuous   = CGEventField(rawValue: 88)!
     private let fMagnitude    = CGEventField(rawValue: 118)!
     private let fGesturePhase = CGEventField(rawValue: 132)!
     private let fSmartZoom    = CGEventField(rawValue: 137)!
     private let tMagnify      = CGEventType(rawValue: 30)!
-
-    private typealias CGSConnectionID = UInt32
-    private typealias CGSSpaceID      = UInt64
-    private typealias CGSConnFn       = @convention(c) () -> CGSConnectionID
-    private typealias CGSDisplaysFn   = @convention(c) (CGSConnectionID) -> CFArray?
-    private typealias CGSSetSpaceFn    = @convention(c) (CGSConnectionID, CFString, CGSSpaceID) -> Void
-    private typealias CGSHideSpacesFn  = @convention(c) (CGSConnectionID, CFArray) -> Void
-
-    private lazy var spaceAPI: (conn: CGSConnFn, displays: CGSDisplaysFn, set: CGSSetSpaceFn, hide: CGSHideSpacesFn)? = {
-        guard let h = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY),
-              let c = dlsym(h, "CGSMainConnectionID"),
-              let d = dlsym(h, "CGSCopyManagedDisplaySpaces"),
-              let s = dlsym(h, "CGSManagedDisplaySetCurrentSpace"),
-              let hi = dlsym(h, "CGSHideSpaces") else { return nil }
-        return (
-            unsafeBitCast(c,  to: CGSConnFn.self),
-            unsafeBitCast(d,  to: CGSDisplaysFn.self),
-            unsafeBitCast(s,  to: CGSSetSpaceFn.self),
-            unsafeBitCast(hi, to: CGSHideSpacesFn.self)
-        )
-    }()
 
     private init() { cursor = osCursor() }
 
@@ -117,8 +95,13 @@ final class TrackpadService {
     private func move(_ dx: CGFloat, _ dy: CGFloat) {
         if let t = lastMove, Date().timeIntervalSince(t) > 2.0 { cursor = osCursor() }
         lastMove = Date()
+        let previous = cursor
         cursor = clamp(CGPoint(x: cursor.x + dx, y: cursor.y + dy))
-        CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: cursor, mouseButton: .left)?.post(tap: .cghidEventTap)
+        let e = CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: cursor, mouseButton: .left)
+        // Apps that read relative motion (hover effects, drawing tools) need the deltas too.
+        e?.setIntegerValueField(.mouseEventDeltaX, value: Int64((cursor.x - previous.x).rounded()))
+        e?.setIntegerValueField(.mouseEventDeltaY, value: Int64((cursor.y - previous.y).rounded()))
+        e?.post(tap: .cghidEventTap)
     }
 
     private func leftClick() {
@@ -214,8 +197,8 @@ final class TrackpadService {
     }
 
     private func swipe(_ dir: SwipeDirection, _ fingers: Int) {
-        if fingers >= 4 {
-            fourFingerSwipe(dir)
+        if fingers >= 3 {
+            navigationSwipe(dir)
         } else if fingers == 2 {
             twoFingerSwipe(dir)
         } else {
@@ -237,90 +220,18 @@ final class TrackpadService {
         }
     }
 
-    private func fourFingerSwipe(_ dir: SwipeDirection) {
+    /// 3- or 4-finger swipe. Uses the same keyboard shortcuts macOS binds to those gestures
+    /// (Control + arrows), so the system plays its normal smooth animation.
+    private func navigationSwipe(_ dir: SwipeDirection) {
         let now = Date()
         if let last = lastSwipeAt, now.timeIntervalSince(last) < swipeCooldown { return }
         lastSwipeAt = now
-
+        let flags: CGEventFlags = [.maskControl, .maskSecondaryFn]
         switch dir {
-        case .left:  switchSpaceAllDisplays(forward: true)
-        case .right: switchSpaceAllDisplays(forward: false)
-        case .up:    openMissionControl()
-        case .down:  openAppExpose()
-        }
-    }
-
-    private func openMissionControl() {
-        DispatchQueue.main.async {
-            NSWorkspace.shared.open(
-                URL(fileURLWithPath: "/System/Applications/Mission Control.app")
-            )
-        }
-    }
-
-    private func openAppExpose() {
-        DistributedNotificationCenter.default().postNotificationName(
-            NSNotification.Name("com.apple.expose.front"),
-            object: nil,
-            userInfo: nil,
-            deliverImmediately: true
-        )
-    }
-
-    private func switchSpaceAllDisplays(forward: Bool) {
-        guard let api = spaceAPI else { return }
-        let conn = api.conn()
-        guard let raw = api.displays(conn) as? [[String: Any]] else { return }
-
-        let activeCursorPoint = NSEvent.mouseLocation
-        let activeScreen = NSScreen.screens.first {
-            NSMouseInRect(activeCursorPoint, $0.frame, false)
-        } ?? NSScreen.main
-
-        for display in raw {
-            guard let spaces    = display["Spaces"] as? [[String: Any]],
-                  let displayID = display["Display Identifier"] as? String else { continue }
-
-            let screenForDisplay = NSScreen.screens.first { screen -> Bool in
-                guard let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 else { return false }
-                let uuid = CGDisplayCreateUUIDFromDisplayID(num).takeRetainedValue()
-                let uuidString = CFUUIDCreateString(nil, uuid) as String
-                return uuidString == displayID
-            }
-
-            let isActiveDisplay: Bool
-            if let scr = screenForDisplay {
-                isActiveDisplay = (scr == activeScreen)
-            } else {
-                isActiveDisplay = (displayID == raw.first?["Display Identifier"] as? String)
-            }
-            guard isActiveDisplay else { continue }
-
-            let ids = spaces.compactMap { $0["id64"] as? UInt64 }
-            guard !ids.isEmpty else { continue }
-
-            let currentID: UInt64
-            if let tracked = lastSwitchedIDs[displayID], ids.contains(tracked) {
-                currentID = tracked
-            } else if let currentSpaceDict = display["Current Space"] as? [String: Any],
-                      let liveID = currentSpaceDict["id64"] as? UInt64 {
-                currentID = liveID
-            } else {
-                currentID = ids[0]
-            }
-
-            guard let currentIdx = ids.firstIndex(of: currentID) else { continue }
-            let targetIdx = forward ? currentIdx + 1 : currentIdx - 1
-            guard targetIdx >= 0 && targetIdx < ids.count else {
-                lastSwitchedIDs[displayID] = currentID
-                continue
-            }
-
-            let targetID  = ids[targetIdx]
-            let hideArray = [currentID as CFNumber] as CFArray
-            lastSwitchedIDs[displayID] = targetID
-            api.hide(conn, hideArray)
-            api.set(conn, displayID as CFString, targetID)
+        case .left:  key(124, flags: flags)   // swipe left  -> next Space (to the right)
+        case .right: key(123, flags: flags)   // swipe right -> previous Space
+        case .up:    key(126, flags: flags)   // Mission Control
+        case .down:  key(125, flags: flags)   // App Exposé
         }
     }
 
@@ -349,8 +260,12 @@ final class TrackpadService {
     }
     private func dragMove(_ dx: CGFloat, _ dy: CGFloat) {
         guard dragActive else { return }
+        let previous = cursor
         cursor = clamp(CGPoint(x: cursor.x + dx, y: cursor.y + dy))
-        CGEvent(mouseEventSource: src, mouseType: .leftMouseDragged, mouseCursorPosition: cursor, mouseButton: .left)?.post(tap: .cghidEventTap)
+        let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseDragged, mouseCursorPosition: cursor, mouseButton: .left)
+        e?.setIntegerValueField(.mouseEventDeltaX, value: Int64((cursor.x - previous.x).rounded()))
+        e?.setIntegerValueField(.mouseEventDeltaY, value: Int64((cursor.y - previous.y).rounded()))
+        e?.post(tap: .cghidEventTap)
     }
     private func dragEnd() {
         guard dragActive else { return }
