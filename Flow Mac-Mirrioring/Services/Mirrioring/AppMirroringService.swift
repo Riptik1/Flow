@@ -24,6 +24,7 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
     nonisolated(unsafe) private var compressionSession: VTCompressionSession?
     nonisolated(unsafe) private var currentCapW: Int = 0
     nonisolated(unsafe) private var currentCapH: Int = 0
+    nonisolated(unsafe) private var trackingBusy = false
 
     private var frameTimer: Timer?
 
@@ -32,6 +33,9 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
     nonisolated(unsafe) private var lastEncodedAt: CFTimeInterval = 0
     private let targetFrameRate: Int = 60
     private let minFrameInterval: CFTimeInterval = 1.0 / 60.0
+    /// Capture at up to 1.5x the window's point size (sharper text on the phone's dense screen).
+    private static let captureScale: Double = 1.5
+    private static let maxCaptureWidth = 2304
 
     func handle(_ message: FlowMessage, reply: @escaping (FlowMessage) -> Void) {
         switch message {
@@ -185,24 +189,27 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
     }
 
     private func buildStream(window: SCWindow, captureFrame: CGRect, bundleID: String, sessionID: UUID, reply: @escaping (FlowMessage) -> Void) async {
-        let frame = captureFrame
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              let display = Self.displayContaining(captureFrame, in: content.displays) else {
+            reply(.appMirroringError(error: "Could not locate the display for this window."))
+            return
+        }
+
+        // Only the part of the window that is actually on the display can be captured. Using that
+        // exact rectangle for both the picture and the click mapping keeps taps landing where you touch.
+        let frame = Self.visibleFrame(captureFrame, displays: content.displays)
+        lock.withLockUnchecked { self.targetWindowFrame = frame }
+
         let rawW = max(Int(frame.width), 2)
         let rawH = max(Int(frame.height), 2)
         let aspect = Double(rawW) / Double(rawH)
-        var capW = min(rawW, 1920)
+        var capW = min(Int(Double(rawW) * Self.captureScale), Self.maxCaptureWidth)
         var capH = max(2, Int(Double(capW) / aspect))
         capW = (capW / 2) * 2
         capH = (capH / 2) * 2
 
         guard let newSession = Self.makeCompressionSession(width: Int32(capW), height: Int32(capH), frameRate: targetFrameRate) else {
             reply(.appMirroringError(error: "Could not create the video encoder."))
-            return
-        }
-
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
-              let display = Self.displayContaining(frame, in: content.displays) else {
-            VTCompressionSessionInvalidate(newSession)
-            reply(.appMirroringError(error: "Could not locate the display for this window."))
             return
         }
 
@@ -303,6 +310,14 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
         })
     }
 
+    /// The part of `frame` that lies on a display (a window dragged half off-screen is clipped).
+    private static func visibleFrame(_ frame: CGRect, displays: [SCDisplay]) -> CGRect {
+        guard let display = displayContaining(frame, in: displays) else { return frame }
+        let visible = frame.intersection(display.frame)
+        guard !visible.isNull, visible.width >= 2, visible.height >= 2 else { return frame }
+        return visible
+    }
+
     private static func selectBestWindow(from windows: [SCWindow], bundleID: String) -> SCWindow? {
         let candidates = windows.filter {
             $0.owningApplication?.bundleIdentifier == bundleID
@@ -337,39 +352,69 @@ final class AppMirroringService: NSObject, SCStreamOutput, SCStreamDelegate, @un
 
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_Baseline_AutoLevel)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: Int32(frameRate * 2) as CFNumber)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 2.0 as CFNumber)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: 8_000_000 as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
+        // A keyframe every second: if a packet is ever lost the picture repairs itself quickly.
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: Int32(frameRate) as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 1.0 as CFNumber)
+        // Scale the budget with the picture size so text stays crisp at any window size.
+        let pixels = Double(width) * Double(height)
+        let bitRate = Int(min(18_000_000, max(6_000_000, pixels * Double(frameRate) * 0.06)))
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitRate as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: Int32(frameRate) as CFNumber)
         VTCompressionSessionPrepareToEncodeFrames(session)
         return session
     }
 
     private func startObservers(bundleID: String, sessionID: UUID) {
-        frameTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        frameTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             guard let self else { return }
-            guard self.lock.withLockUnchecked({ self.isRunning && self.currentSessionID == sessionID }) else { return }
-            Task {
-                guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) else { return }
-                guard let best = await Self.selectBestWindow(from: content.windows, bundleID: bundleID) else { return }
-
-                let knownID = await self.lock.withLockUnchecked { self.currentWindowID }
-                let refined = await Self.refinedInputFrame(for: best)
-                if best.windowID != knownID {
-                    await self.lock.withLockUnchecked {
-                        self.targetWindowFrame = refined
-                        self.currentWindowID = best.windowID
-                    }
-                    await self.switchToNewWindow(window: best, captureFrame: refined, bundleID: bundleID, sessionID: sessionID)
-                } else {
-                    let previousFrame = await self.lock.withLockUnchecked { self.targetWindowFrame }
-                    await self.lock.withLockUnchecked { self.targetWindowFrame = refined }
-                    if previousFrame != refined {
-                        await self.updateSourceRect(for: refined, sessionID: sessionID)
-                    }
-                }
+            // One check at a time: a slow window lookup must never queue up behind itself.
+            let shouldRun = self.lock.withLockUnchecked { () -> Bool in
+                guard self.isRunning, self.currentSessionID == sessionID, !self.trackingBusy else { return false }
+                self.trackingBusy = true
+                return true
             }
+            guard shouldRun else { return }
+            Task {
+                await self.trackWindow(bundleID: bundleID, sessionID: sessionID)
+                self.lock.withLockUnchecked { self.trackingBusy = false }
+            }
+        }
+    }
+
+    private func trackWindow(bundleID: String, sessionID: UUID) async {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              let best = Self.selectBestWindow(from: content.windows, bundleID: bundleID) else { return }
+
+        let refined = Self.visibleFrame(Self.refinedInputFrame(for: best), displays: content.displays)
+        let (knownID, previousFrame, capW, capH) = lock.withLockUnchecked {
+            (self.currentWindowID, self.targetWindowFrame, self.currentCapW, self.currentCapH)
+        }
+        guard lock.withLockUnchecked({ self.isRunning && self.currentSessionID == sessionID }) else { return }
+
+        if best.windowID != knownID {
+            lock.withLockUnchecked {
+                self.targetWindowFrame = refined
+                self.currentWindowID = best.windowID
+            }
+            await switchToNewWindow(window: best, captureFrame: refined, bundleID: bundleID, sessionID: sessionID)
+            return
+        }
+
+        lock.withLockUnchecked { self.targetWindowFrame = refined }
+
+        // Resized to a different shape: rebuild so the picture isn't stretched and the phone gets the new aspect.
+        if capW > 0, capH > 0, refined.height > 0 {
+            let captureAspect = Double(capW) / Double(capH)
+            let windowAspect = Double(refined.width / refined.height)
+            if abs(windowAspect - captureAspect) / captureAspect > 0.03 {
+                await switchToNewWindow(window: best, captureFrame: refined, bundleID: bundleID, sessionID: sessionID)
+                return
+            }
+        }
+
+        if previousFrame != refined {
+            await updateSourceRect(for: refined, sessionID: sessionID)
         }
     }
 

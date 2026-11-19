@@ -55,6 +55,7 @@ final class FileService {
             }
         case .keyPress: KeyboardService.shared.handle(message)
         case .touchBarStateRequest, .touchBarAction, .typeText: TouchBarService.shared.handle(message, reply: reply)
+        case .setDisplayBrightness, .requestDisplayBrightness: DisplayBrightnessService.shared.handle(message, reply: reply)
         case .spotlightOpen(let path): NSWorkspace.shared.open(URL(fileURLWithPath: path))
         default: TrackpadService.shared.handle(message)
         }

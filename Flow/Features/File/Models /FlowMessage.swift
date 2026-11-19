@@ -235,6 +235,10 @@ enum FlowMessage: Codable {
     case appMirroringRemoteAnswer(sdp: String)
     case appMirroringRemoteCandidate(sdp: String, sdpMLineIndex: Int32, sdpMid: String)
     case appMirroringRemoteEnd
+    /// Privacy brightness: 0 = Mac screen fully dark, 1 = full brightness.
+    case setDisplayBrightness(level: Float)
+    case requestDisplayBrightness
+    case displayBrightness(level: Float)
 }
 
 struct RemoteFileItem: Codable, Identifiable {

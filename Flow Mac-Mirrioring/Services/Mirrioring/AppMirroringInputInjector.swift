@@ -36,20 +36,49 @@ final class AppMirroringInputInjector {
         )
     }
 
+    // MARK: - Click bookkeeping (only touched on inputQueue)
+
+    private var lastClickAt: CFTimeInterval = 0
+    private var lastClickPoint: CGPoint = .zero
+    private var lastClickCount: Int64 = 0
+    private var activeClickState: Int64 = 1
+    private var scrollActive = false
+    private var scrollEndWork: DispatchWorkItem?
+
+    /// Two quick taps in (nearly) the same spot become a real double click on the Mac,
+    /// so the phone can send every tap immediately instead of waiting to see if a second one follows.
+    private func nextClickState(at pt: CGPoint) -> Int64 {
+        let now = CACurrentMediaTime()
+        let near = hypot(pt.x - lastClickPoint.x, pt.y - lastClickPoint.y) < 14
+        let count: Int64 = (now - lastClickAt < 0.45 && near) ? min(lastClickCount + 1, 3) : 1
+        lastClickAt = now
+        lastClickPoint = pt
+        lastClickCount = count
+        return count
+    }
+
+    /// Moving the pointer first makes hover/tracking areas (browsers, Electron apps, menus) see the click location.
+    private func move(to pt: CGPoint, src: CGEventSource) {
+        CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: pt, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+    }
+
+    private func mouse(_ type: CGEventType, _ pt: CGPoint, _ button: CGMouseButton, state: Int64, src: CGEventSource) {
+        guard let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: pt, mouseButton: button) else { return }
+        e.setIntegerValueField(.mouseEventClickState, value: state)
+        e.post(tap: .cghidEventTap)
+    }
+
     func injectClick(x: Float, y: Float, windowFrame: CGRect) {
         guard windowFrame.width > 0, windowFrame.height > 0 else { return }
         let pt = screenPoint(x: x, y: y, windowFrame: windowFrame)
         inputQueue.async {
             guard let src = CGEventSource(stateID: .hidSystemState) else { return }
-            if let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left) {
-                e.setIntegerValueField(.mouseEventClickState, value: 1)
-                e.post(tap: .cghidEventTap)
-            }
-            usleep(20_000)
-            if let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left) {
-                e.setIntegerValueField(.mouseEventClickState, value: 1)
-                e.post(tap: .cghidEventTap)
-            }
+            let state = self.nextClickState(at: pt)
+            self.move(to: pt, src: src)
+            self.mouse(.leftMouseDown, pt, .left, state: state, src: src)
+            usleep(12_000)
+            self.mouse(.leftMouseUp, pt, .left, state: state, src: src)
         }
     }
 
@@ -60,17 +89,13 @@ final class AppMirroringInputInjector {
             guard let src = CGEventSource(stateID: .hidSystemState) else { return }
             switch phase {
             case 0:
-                if let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left) {
-                    e.setIntegerValueField(.mouseEventClickState, value: 1)
-                    e.post(tap: .cghidEventTap)
-                }
+                self.activeClickState = self.nextClickState(at: pt)
+                self.move(to: pt, src: src)
+                self.mouse(.leftMouseDown, pt, .left, state: self.activeClickState, src: src)
             case 1:
-                CGEvent(mouseEventSource: src, mouseType: .leftMouseDragged, mouseCursorPosition: pt, mouseButton: .left)?.post(tap: .cghidEventTap)
+                self.mouse(.leftMouseDragged, pt, .left, state: self.activeClickState, src: src)
             default:
-                if let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left) {
-                    e.setIntegerValueField(.mouseEventClickState, value: 1)
-                    e.post(tap: .cghidEventTap)
-                }
+                self.mouse(.leftMouseUp, pt, .left, state: self.activeClickState, src: src)
             }
         }
     }
@@ -80,9 +105,10 @@ final class AppMirroringInputInjector {
         let pt = screenPoint(x: x, y: y, windowFrame: windowFrame)
         inputQueue.async {
             guard let src = CGEventSource(stateID: .hidSystemState) else { return }
-            CGEvent(mouseEventSource: src, mouseType: .rightMouseDown, mouseCursorPosition: pt, mouseButton: .right)?.post(tap: .cghidEventTap)
-            usleep(50_000)
-            CGEvent(mouseEventSource: src, mouseType: .rightMouseUp, mouseCursorPosition: pt, mouseButton: .right)?.post(tap: .cghidEventTap)
+            self.move(to: pt, src: src)
+            self.mouse(.rightMouseDown, pt, .right, state: 1, src: src)
+            usleep(30_000)
+            self.mouse(.rightMouseUp, pt, .right, state: 1, src: src)
         }
     }
 
@@ -91,36 +117,31 @@ final class AppMirroringInputInjector {
         let pt = screenPoint(x: x, y: y, windowFrame: windowFrame)
         inputQueue.async {
             guard let src = CGEventSource(stateID: .hidSystemState) else { return }
-            if let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left) {
-                e.setIntegerValueField(.mouseEventClickState, value: 1)
-                e.post(tap: .cghidEventTap)
+            self.move(to: pt, src: src)
+            for state in [Int64(1), 2] {
+                self.mouse(.leftMouseDown, pt, .left, state: state, src: src)
+                usleep(15_000)
+                self.mouse(.leftMouseUp, pt, .left, state: state, src: src)
+                usleep(15_000)
             }
-            usleep(30_000)
-            if let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left) {
-                e.setIntegerValueField(.mouseEventClickState, value: 1)
-                e.post(tap: .cghidEventTap)
-            }
-            usleep(30_000)
-            if let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left) {
-                e.setIntegerValueField(.mouseEventClickState, value: 2)
-                e.post(tap: .cghidEventTap)
-            }
-            usleep(30_000)
-            if let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left) {
-                e.setIntegerValueField(.mouseEventClickState, value: 2)
-                e.post(tap: .cghidEventTap)
-            }
+            self.lastClickAt = CACurrentMediaTime()
+            self.lastClickPoint = pt
+            self.lastClickCount = 2
         }
     }
 
+    /// Scroll deltas from one finger gesture are sent as one continuous scroll (began → changed → ended),
+    /// like a real trackpad, instead of many separate gestures. That is what makes scrolling smooth.
     func injectScroll(deltaX: Float, deltaY: Float) {
         inputQueue.async {
             guard let src = CGEventSource(stateID: .hidSystemState) else { return }
 
+            let phase: Int64 = self.scrollActive ? 2 : 1
+            self.scrollActive = true
             if let e = CGEvent(source: src) {
                 e.type = .scrollWheel
                 e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-                e.setIntegerValueField(.scrollWheelEventScrollPhase, value: 1)
+                e.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
                 e.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: Double(deltaY))
                 e.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: Double(deltaX))
                 e.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(deltaY.rounded()))
@@ -128,14 +149,21 @@ final class AppMirroringInputInjector {
                 e.post(tap: .cghidEventTap)
             }
 
-            if let e = CGEvent(source: src) {
-                e.type = .scrollWheel
-                e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-                e.setIntegerValueField(.scrollWheelEventScrollPhase, value: 4)
-                e.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: 0)
-                e.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: 0)
-                e.post(tap: .cghidEventTap)
+            self.scrollEndWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, let src = CGEventSource(stateID: .hidSystemState) else { return }
+                self.scrollActive = false
+                if let e = CGEvent(source: src) {
+                    e.type = .scrollWheel
+                    e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+                    e.setIntegerValueField(.scrollWheelEventScrollPhase, value: 4)
+                    e.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: 0)
+                    e.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: 0)
+                    e.post(tap: .cghidEventTap)
+                }
             }
+            self.scrollEndWork = work
+            self.inputQueue.asyncAfter(deadline: .now() + 0.09, execute: work)
         }
     }
 

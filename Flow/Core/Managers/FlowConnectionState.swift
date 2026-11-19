@@ -75,6 +75,9 @@ final class ConnectionManager: NSObject, ObservableObject {
     @Published var discoveredPeers: [DiscoveredPeer] = []
     @Published var connectedPeer: DiscoveredPeer? = nil
     @Published var macProfileImageData: Data? = nil
+    /// Set when several Macs are nearby: the app should show the device sheet and let the user pick.
+    @Published var needsDeviceChoice = false
+    private var autoConnectWork: DispatchWorkItem?
 
     private let savedPeerKey = "flow.lastConnectedPeer"
 
@@ -320,14 +323,29 @@ final class ConnectionManager: NSObject, ObservableObject {
         } catch {}
     }
 
+    /// Waits briefly so every nearby Mac has been discovered, then decides:
+    /// exactly one Mac and it's the saved one -> reconnect quietly;
+    /// more than one Mac -> never guess, ask the user to pick.
     private func autoConnectIfSaved(_ peer: DiscoveredPeer) {
-        guard let saved = savedPeerName, peer.deviceName == saved else { return }
-        if peer.deviceName == flakyPeerName, let until = flakyCooldownUntil, Date() < until {
-            flowLog("[Flow][Local] autoConnectIfSaved: \(peer.deviceName) is in flaky cooldown until \(until), skipping auto-invite so remote can take over")
-            return
-        }
         #if canImport(UIKit)
-        connect(to: peer)
+        autoConnectWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.state != .connected, self.state != .connecting else { return }
+            let macs = self.discoveredPeers
+            if macs.count > 1 {
+                flowLog("[Flow][Local] \(macs.count) Macs nearby, asking the user to choose instead of auto-connecting")
+                self.needsDeviceChoice = true
+                return
+            }
+            guard let only = macs.first, let saved = self.savedPeerName, only.deviceName == saved else { return }
+            if only.deviceName == self.flakyPeerName, let until = self.flakyCooldownUntil, Date() < until {
+                flowLog("[Flow][Local] autoConnect: \(only.deviceName) is in flaky cooldown until \(until), skipping auto-invite so remote can take over")
+                return
+            }
+            self.connect(to: only)
+        }
+        autoConnectWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
         #endif
     }
 

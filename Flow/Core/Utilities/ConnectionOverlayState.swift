@@ -160,7 +160,7 @@ struct DeviceSearchSheet: View {
                     searchingView
                 }
             }
-            .navigationTitle("Connect to Mac")
+            .navigationTitle(connection.discoveredPeers.count > 1 ? "Choose a Mac" : "Connect to Mac")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -170,7 +170,7 @@ struct DeviceSearchSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
         .presentationCornerRadius(24)
         .onAppear {
             if connection.state == .disconnected {
@@ -258,6 +258,7 @@ private struct DiscoveredPeerRow: View {
     let isLast: Bool
     let onConnect: () -> Void
     @ObservedObject private var connection = ConnectionManager.shared
+    @ObservedObject private var aliases = DeviceAliasStore.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -268,7 +269,7 @@ private struct DiscoveredPeerRow: View {
                     .frame(width: 36)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(peer.deviceName)
+                    Text(aliases.displayName(for: peer.deviceName))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
                     Text(peer.deviceModel)
@@ -294,6 +295,10 @@ private struct DiscoveredPeerRow: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if connection.state != .connecting { onConnect() }
+            }
 
             if !isLast {
                 Divider().padding(.leading, 66)

@@ -22,6 +22,7 @@ struct AppMirroringView: View {
     @State private var isZoomLocked = false
     @State private var showSubscription = false
     @State private var showPremiumAlert = false
+    @State private var showBrightnessMenu = false
 
     private let minZoom: CGFloat = 1.0
     private let maxZoom: CGFloat = 8.0
@@ -138,6 +139,14 @@ struct AppMirroringView: View {
                         }
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
+                    .ignoresSafeArea()
+
+                    if showBrightnessMenu {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { showBrightnessMenu = false } }
+                            .ignoresSafeArea()
+                    }
 
                     if let loc = viewModel.selectionMenuLocation {
                         Color.clear
@@ -229,12 +238,36 @@ struct AppMirroringView: View {
             .padding(.top, 12).padding(.trailing, 12)
         }
         .overlay(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(appName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(.ultraThinMaterial).clipShape(Capsule())
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.15)) { showBrightnessMenu.toggle() }
+                        if showBrightnessMenu { viewModel.requestBrightness() }
+                    } label: {
+                        Image(systemName: viewModel.macBrightness < 0.02 ? "eye.slash.fill" : "eye.slash")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(showBrightnessMenu || viewModel.macBrightness < 0.02
+                                        ? Color.blue.opacity(0.75) : Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .accessibilityLabel("Privacy: Mac screen brightness")
+
+                    Text(appName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.ultraThinMaterial).clipShape(Capsule())
+                }
+                if showBrightnessMenu {
+                    PrivacyBrightnessMenu(
+                        level: viewModel.macBrightness,
+                        onChange: { viewModel.setBrightness($0) },
+                        onCommit: { viewModel.commitBrightness() }
+                    )
+                    .transition(.scale(scale: 0.92, anchor: .topLeading).combined(with: .opacity))
+                }
                 if zoomScale > 1.05 {
                     Text(String(format: "%.1f×", zoomScale))
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -331,6 +364,68 @@ struct AppMirroringView: View {
                     .background(Color.white.opacity(0.15)).clipShape(Capsule())
             }
         }
+    }
+}
+
+/// Drop-down for the privacy button: a slider plus quick 0–10 steps. 0 turns the Mac's screen
+/// fully dark, so nobody next to it can see it is running (the mirror keeps working).
+private struct PrivacyBrightnessMenu: View {
+    let level: Double
+    let onChange: (Double) -> Void
+    let onCommit: () -> Void
+
+    private var percent: Int { Int((level * 100).rounded()) }
+    private var step: Int { Int((level * 10).rounded()) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: level < 0.02 ? "eye.slash.fill" : "sun.max.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Mac Brightness")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Text("\(percent)%")
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+            }
+
+            Slider(
+                value: Binding(get: { level }, set: { onChange($0) }),
+                in: 0...1,
+                onEditingChanged: { editing in if !editing { onCommit() } }
+            )
+            .tint(.white)
+
+            HStack(spacing: 4) {
+                ForEach(0...10, id: \.self) { n in
+                    Button {
+                        onChange(Double(n) / 10)
+                        onCommit()
+                    } label: {
+                        Text("\(n)")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .frame(maxWidth: .infinity, minHeight: 30)
+                            .background(step == n ? Color.white : Color.white.opacity(0.14))
+                            .foregroundStyle(step == n ? Color.black : Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
+            }
+
+            Text(level < 0.02
+                 ? "Screen is off. Nobody nearby can tell your Mac is on."
+                 : "0 turns the Mac's screen fully dark.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.65))
+        }
+        .foregroundStyle(.white)
+        .padding(14)
+        .frame(width: 340)
+        .background(.ultraThinMaterial)
+        .background(Color.black.opacity(0.35))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .environment(\.colorScheme, .dark)
+        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
     }
 }
 

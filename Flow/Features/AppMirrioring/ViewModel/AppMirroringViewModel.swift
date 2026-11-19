@@ -18,6 +18,8 @@ final class AppMirroringViewModel: ObservableObject {
     @Published var captureAspect: CGFloat = 16.0 / 9.0
     @Published var selectionMenuLocation: CGPoint?
     @Published var shareText: String?
+    /// Mac screen brightness, 0 (dark – nobody nearby can tell it's on) ... 1 (full).
+    @Published var macBrightness: Double = 1
 
     private var hasStartedStream = false
 
@@ -27,6 +29,10 @@ final class AppMirroringViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var timeoutTask: Task<Void, Never>?
     private var awaitingClipboardForShare = false
+    private var brightnessBeforeChange: Double?
+    private var brightnessWasChanged = false
+    private var lastBrightnessSentAt = Date.distantPast
+    private var pendingBrightnessSend: DispatchWorkItem?
 
     init(connectionService: FlowConnectionServicing = LiveFlowConnectionService.shared) {
         self.connectionService = connectionService
@@ -76,6 +82,7 @@ final class AppMirroringViewModel: ObservableObject {
     }
 
     func stopMirroring() {
+        restoreBrightnessIfNeeded()
         timeoutTask?.cancel(); timeoutTask = nil
         connectionService.send(.stopAppMirroring)
         isSessionActive = false
@@ -127,6 +134,55 @@ final class AppMirroringViewModel: ObservableObject {
 
     func sendScroll(deltaX: CGFloat, deltaY: CGFloat) {
         connectionService.send(.appMirroringInputScroll(dx: Float(deltaX), dy: Float(deltaY)))
+    }
+
+    // MARK: - Privacy brightness
+
+    func requestBrightness() {
+        connectionService.send(.requestDisplayBrightness)
+    }
+
+    /// Called continuously while the slider moves; sends are spaced out so the Mac and the link keep up,
+    /// and the final value is always delivered.
+    func setBrightness(_ value: Double) {
+        let level = min(1, max(0, value))
+        macBrightness = level
+        brightnessWasChanged = true
+        let interval = 0.05
+        let elapsed = Date().timeIntervalSince(lastBrightnessSentAt)
+        if elapsed >= interval {
+            flushBrightness()
+        } else if pendingBrightnessSend == nil {
+            let work = DispatchWorkItem { [weak self] in self?.flushBrightness() }
+            pendingBrightnessSend = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + (interval - elapsed), execute: work)
+        }
+    }
+
+    /// Sends the latest value now and asks the Mac what it really applied (so the UI never lies).
+    func commitBrightness() {
+        flushBrightness()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.connectionService.send(.requestDisplayBrightness)
+        }
+    }
+
+    private func flushBrightness() {
+        pendingBrightnessSend?.cancel()
+        pendingBrightnessSend = nil
+        lastBrightnessSentAt = Date()
+        connectionService.send(.setDisplayBrightness(level: Float(macBrightness)))
+    }
+
+    /// Leaving mirroring puts the Mac's screen back, so it isn't left dark by accident.
+    private func restoreBrightnessIfNeeded() {
+        pendingBrightnessSend?.cancel()
+        pendingBrightnessSend = nil
+        guard brightnessWasChanged else { return }
+        brightnessWasChanged = false
+        let original = brightnessBeforeChange ?? 1
+        macBrightness = original
+        connectionService.send(.setDisplayBrightness(level: Float(original)))
     }
 
     func copySelection() {
@@ -195,6 +251,17 @@ final class AppMirroringViewModel: ObservableObject {
         case .appMirroringStopped:
             isSessionActive = false
             hasReceivedFrame = false
+
+        case .displayBrightness(let level):
+            let value = Double(min(1, max(0, level)))
+            if !brightnessWasChanged || brightnessBeforeChange == nil {
+                // Remember what the Mac was at before we touched it (never "restore" to a dark screen).
+                if brightnessBeforeChange == nil { brightnessBeforeChange = value < 0.1 ? 0.7 : value }
+            }
+            // Don't fight the slider while the user is dragging it.
+            if pendingBrightnessSend == nil, Date().timeIntervalSince(lastBrightnessSentAt) > 0.2 {
+                macBrightness = value
+            }
 
         case .clipboardDidChange(let item):
             guard awaitingClipboardForShare else { return }

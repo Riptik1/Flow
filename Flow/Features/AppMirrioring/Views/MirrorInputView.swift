@@ -35,7 +35,6 @@ final class MirrorInputView: UIView, UIGestureRecognizerDelegate {
     }
 
     private var tapGesture: UITapGestureRecognizer!
-    private var doubleTapGesture: UITapGestureRecognizer!
     private var twoFingerTapGesture: UITapGestureRecognizer!
     private var twoFingerDoubleTapGesture: UITapGestureRecognizer!
     private var dragGesture: UILongPressGestureRecognizer!
@@ -66,17 +65,12 @@ final class MirrorInputView: UIView, UIGestureRecognizerDelegate {
     required init?(coder: NSCoder) { super.init(coder: coder) }
 
     private func setupGestures() {
-        doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTapSingle))
-        doubleTapGesture.numberOfTapsRequired = 2
-        doubleTapGesture.numberOfTouchesRequired = 1
-        doubleTapGesture.delegate = self
-        addGestureRecognizer(doubleTapGesture)
-
+        // No separate one-finger double-tap recognizer: waiting to see whether a second tap follows
+        // delayed every click by ~0.3s. Each tap is sent at once and the Mac turns two quick taps into a double click.
         tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap))
         tapGesture.numberOfTapsRequired = 1
         tapGesture.numberOfTouchesRequired = 1
         tapGesture.delegate = self
-        tapGesture.require(toFail: doubleTapGesture)
         addGestureRecognizer(tapGesture)
 
         twoFingerTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTwoFingerTap))
@@ -153,10 +147,6 @@ final class MirrorInputView: UIView, UIGestureRecognizerDelegate {
     @objc private func handleTap(_ g: UITapGestureRecognizer) {
         guard !isDragging, !isSelecting else { return }
         onTap?(g.location(in: self), bounds.size)
-    }
-
-    @objc private func handleDoubleTapSingle(_ g: UITapGestureRecognizer) {
-        onDoubleTap?(g.location(in: self), bounds.size)
     }
 
     @objc private func handleTwoFingerTap(_ g: UITapGestureRecognizer) {

@@ -13,7 +13,12 @@ struct DevicesView: View {
     @StateObject private var connection = RemoteConnectionManager.shared
     @ObservedObject private var repo = FlowConnectionRepository.shared
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var aliases = DeviceAliasStore.shared
     @State private var showRemotePairing = false
+    /// Real device name of the Mac being renamed, and the text being typed.
+    @State private var renameTarget: String?
+    @State private var renameText = ""
+    @State private var deleteTarget: SavedDevice?
 
     init(factory: FlowViewModelFactory = ViewModelFactory.shared) {
         self.factory = factory
@@ -49,6 +54,38 @@ struct DevicesView: View {
             if repo.state == .disconnected { repo.startSearching() }
         }
         .sheet(isPresented: $showRemotePairing) { RemotePairingView() }
+        .alert("Rename Device", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let target = renameTarget { aliases.setName(renameText, for: target) }
+                renameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+        } message: {
+            Text("Choose how this device is named in Flow.")
+        }
+        .confirmationDialog(
+            "Delete this device?",
+            isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let device = deleteTarget {
+                    vm.remove(device)
+                    aliases.removeName(for: device.name)
+                }
+                deleteTarget = nil
+            }
+            Button("Cancel", role: .cancel) { deleteTarget = nil }
+        } message: {
+            Text("You'll need to pair it again to use it remotely.")
+        }
+        .onChange(of: repo.connectedPeer?.deviceName) { _, name in
+            if let name { aliases.unhide(name) }
+        }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active { vm.reload() }
         }
@@ -65,7 +102,11 @@ struct DevicesView: View {
             peers.insert(current, at: 0)
         }
         let pairedNames = Set(vm.devices.map(\.name))
-        return peers.filter { !pairedNames.contains($0.deviceName) }
+        let connectedName = repo.connectedPeer?.deviceName
+        return peers.filter {
+            !pairedNames.contains($0.deviceName)
+                && (!aliases.hidden.contains($0.deviceName) || $0.deviceName == connectedName)
+        }
     }
 
     private func localPeerRow(_ peer: DiscoveredPeer) -> some View {
@@ -83,7 +124,7 @@ struct DevicesView: View {
                 .frame(width: 48, height: 48)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(peer.deviceName)
+                    Text(aliases.displayName(for: peer.deviceName))
                         .font(.system(size: 16, weight: .semibold))
                     if isConnected {
                         HStack(spacing: 5) {
@@ -117,7 +158,34 @@ struct DevicesView: View {
                 Label("Connect", systemImage: "personalhotspot")
             }
             .disabled(isConnected)
+
+            Button {
+                beginRename(deviceName: peer.deviceName)
+            } label: {
+                Label("Edit Name", systemImage: "pencil")
+            }
+
+            Button(role: .destructive) {
+                forgetLocal(peer, isConnected: isConnected)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
         }
+    }
+
+    private func beginRename(deviceName: String) {
+        renameText = aliases.displayName(for: deviceName)
+        renameTarget = deviceName
+    }
+
+    /// A nearby Mac can't be un-paired, so deleting it stops auto-connect, disconnects it and hides it.
+    private func forgetLocal(_ peer: DiscoveredPeer, isConnected: Bool) {
+        if ConnectionManager.shared.savedPeerName == peer.deviceName {
+            ConnectionManager.shared.savedPeerName = nil
+        }
+        if isConnected { repo.disconnect() }
+        aliases.removeName(for: peer.deviceName)
+        aliases.hide(peer.deviceName)
     }
 
     private func syncConnectedDevice() {
@@ -162,7 +230,7 @@ struct DevicesView: View {
                 .frame(width: 48, height: 48)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(device.name)
+                    Text(aliases.displayName(for: device.name))
                         .font(.system(size: 16, weight: .semibold))
 
                     if isThisDeviceConnected {
@@ -196,8 +264,14 @@ struct DevicesView: View {
             }
             .disabled(isThisDeviceConnected)
 
+            Button {
+                beginRename(deviceName: device.name)
+            } label: {
+                Label("Edit Name", systemImage: "pencil")
+            }
+
             Button(role: .destructive) {
-                vm.remove(device)
+                deleteTarget = device
             } label: {
                 Label("Delete", systemImage: "trash")
             }

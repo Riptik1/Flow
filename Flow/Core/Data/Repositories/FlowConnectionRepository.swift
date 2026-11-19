@@ -24,6 +24,7 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
     @Published var discoveredPeers: [DiscoveredPeer] = []
     @Published var connectedPeer: DiscoveredPeer? = nil
     @Published var pairingError: String? = nil
+    @Published var needsDeviceChoice = false
     @Published var macProfileImageData: Data? = nil
     @Published private(set) var pairingCompletionToken = UUID()
 
@@ -194,6 +195,11 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
             .assign(to: \.discoveredPeers, on: self)
             .store(in: &cancellables)
 
+        local.$needsDeviceChoice
+            .receive(on: DispatchQueue.main)
+            .assign(to: \.needsDeviceChoice, on: self)
+            .store(in: &cancellables)
+
         local.$connectedPeer
             .receive(on: DispatchQueue.main)
             .sink { [weak self] peer in
@@ -325,6 +331,10 @@ final class FlowConnectionRepository: ObservableObject, FlowConnectionServicing 
 
     func startSearching() {
         local.startSearching()
+    }
+
+    func consumeDeviceChoiceRequest() {
+        local.needsDeviceChoice = false
     }
 
     func cancelSearching() {

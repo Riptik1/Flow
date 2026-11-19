@@ -121,6 +121,7 @@ struct TrackpadCard: View {
 struct DeviceInfoCard: View {
     @StateObject private var connection = FlowConnectionRepository.shared
     @State private var showSearchSheet = false
+    @ObservedObject private var aliases = DeviceAliasStore.shared
 
     var body: some View {
         CardOverlay(state: cardOverlayState, onAction: handleConnectTap) {
@@ -141,7 +142,7 @@ struct DeviceInfoCard: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        Text(connection.connectedPeer?.deviceName ?? "MacBook")
+                        Text(connection.connectedPeer.map { aliases.displayName(for: $0.deviceName) } ?? "MacBook")
                             .font(.title2)
                             .fontWeight(.bold)
                             .foregroundStyle(connection.state == .connected ? .primary : .tertiary)
@@ -169,6 +170,14 @@ struct DeviceInfoCard: View {
         }
         .sheet(isPresented: $showSearchSheet) {
             DeviceSearchSheet(onDismiss: { showSearchSheet = false })
+        }
+        // Several Macs nearby: never auto-connect, open the list so the user taps the one they want.
+        .onChange(of: connection.needsDeviceChoice) { _, needs in
+            guard needs else { return }
+            connection.consumeDeviceChoiceRequest()
+            if connection.state != .connected, connection.state != .connecting {
+                showSearchSheet = true
+            }
         }
     }
 

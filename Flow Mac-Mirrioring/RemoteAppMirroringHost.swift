@@ -29,6 +29,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
     private nonisolated(unsafe) var lastEncodedAt: CFTimeInterval = 0
     private nonisolated(unsafe) var lastAppliedBitRate: Int32 = 0
     private nonisolated(unsafe) var lastRawWindowSize: CGSize = .zero
+    private nonisolated(unsafe) var trackingBusy = false
 
     private var frameTimer: Timer?
     private let encodeSemaphore = DispatchSemaphore(value: 2)
@@ -269,6 +270,13 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         return current
     }
 
+    private static func visibleFrame(_ frame: CGRect, displays: [SCDisplay]) -> CGRect {
+        guard let display = displayContaining(frame, in: displays) else { return frame }
+        let visible = frame.intersection(display.frame)
+        guard !visible.isNull, visible.width >= 2, visible.height >= 2 else { return frame }
+        return visible
+    }
+
     private static func displayContaining(_ rect: CGRect, in displays: [SCDisplay]) -> SCDisplay? {
         displays.max(by: {
             $0.frame.intersection(rect).width * $0.frame.intersection(rect).height <
@@ -277,7 +285,17 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
     }
 
     private func buildStream(window: SCWindow, captureFrame: CGRect, bundleID: String, sessionID: UUID, reply: @escaping (FlowMessage) -> Void) async {
-        let frame = captureFrame
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              let display = Self.displayContaining(captureFrame, in: content.displays) else {
+            flowLog("[Flow][RemoteHost] buildStream: could not locate display for this window")
+            reply(.appMirroringError(error: "Could not locate the display for this window."))
+            return
+        }
+
+        // Capture and click mapping must use the same on-screen rectangle.
+        let frame = Self.visibleFrame(captureFrame, displays: content.displays)
+        lockedValue { targetWindowFrame = frame }
+
         let rawW = max(Int(frame.width), 2)
         let rawH = max(Int(frame.height), 2)
         let aspect = Double(rawW) / Double(rawH)
@@ -291,14 +309,6 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
         guard let newSession = Self.makeCompressionSession(width: Int32(capW), height: Int32(capH), frameRate: targetFrameRate, bitRate: averageBitRate) else {
             flowLog("[Flow][RemoteHost] buildStream: makeCompressionSession FAILED")
             reply(.appMirroringError(error: "Could not create the video encoder."))
-            return
-        }
-
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
-              let display = Self.displayContaining(frame, in: content.displays) else {
-            flowLog("[Flow][RemoteHost] buildStream: could not locate display for this window")
-            VTCompressionSessionInvalidate(newSession)
-            reply(.appMirroringError(error: "Could not locate the display for this window."))
             return
         }
 
@@ -617,8 +627,14 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
             guard let self else { return }
             self.frameTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
                 guard let self else { return }
-                guard self.lockedValue({ self.isRunning && self.currentSessionID == sessionID }) else { return }
+                let shouldRun = self.lockedValue { () -> Bool in
+                    guard self.isRunning, self.currentSessionID == sessionID, !self.trackingBusy else { return false }
+                    self.trackingBusy = true
+                    return true
+                }
+                guard shouldRun else { return }
                 Task {
+                    defer { self.lockedValue { self.trackingBusy = false } }
                     guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) else { return }
                     guard var best = await Self.selectBestWindow(from: content.windows, bundleID: bundleID) else { return }
                     guard await self.lockedValue({ self.isRunning && self.currentSessionID == sessionID }) else { return }
@@ -629,7 +645,8 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
                     let isResizing = previousSize.width > 0 && previousSize.height > 0 && (widthDelta > 8 || heightDelta > 8)
 
                     let previousOrigin = await self.lockedValue { self.targetWindowFrame.origin }
-                    let originDelta = max(abs(previousOrigin.x - best.frame.origin.x), abs(previousOrigin.y - best.frame.origin.y))
+                    let bestOrigin = Self.visibleFrame(best.frame, displays: content.displays).origin
+                    let originDelta = max(abs(previousOrigin.x - bestOrigin.x), abs(previousOrigin.y - bestOrigin.y))
                     let hasMoved = originDelta > 2
 
                     if isResizing {
@@ -637,7 +654,7 @@ final class RemoteAppMirroringHost: NSObject, SCStreamOutput, SCStreamDelegate, 
                         guard await self.lockedValue({ self.isRunning && self.currentSessionID == sessionID }) else { return }
                     }
 
-                    let refined = await Self.refinedInputFrame(for: best)
+                    let refined = Self.visibleFrame(Self.refinedInputFrame(for: best), displays: content.displays)
                     await self.lockedValue {
                         self.targetWindowFrame = refined
                         self.currentWindowID = best.windowID
